@@ -1,0 +1,45 @@
+# Config file with API keys
+config.json
+
+# Temporary upload folder
+temp_uploads/
+
+# Input images folder
+input_images/
+
+# Markdown Output - for users only
+markdown_output/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+venv/
+env/
+ENV/
+.env
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+
+# Responses cache
+responses.json
+responses.json.bak
+
+# Obsidian tags
+obsidian_tags.json
+obsidian_hashtags.txt

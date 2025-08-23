@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Photo Organizer & OCR</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .upload-area { border: 2px dashed #ddd; border-radius: 8px; padding: 40px; text-align: center; margin: 20px 0; background: white; }
+        .upload-area.dragover { border-color: #007bff; background: #f8f9fa; }
+        .btn { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin: 5px; font-size: 14px; }
+        .btn:hover { background: #0056b3; }
+        .btn-danger { background: #dc3545; }
+        .btn-danger:hover { background: #c82333; }
+        .btn-success { background: #28a745; }
+        .btn-success:hover { background: #218838; }
+        .btn-secondary { background: #6c757d; }
+        .btn-secondary:hover { background: #5a6268; }
+        
+        .uploaded-images { background: white; border-radius: 8px; padding: 20px; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .images-container { display: flex; flex-wrap: wrap; gap: 15px; margin: 20px 0; }
+        .image-item { position: relative; border: 2px solid transparent; border-radius: 8px; overflow: hidden; cursor: pointer; transition: all 0.2s; }
+        .image-item:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        .image-item.selected { border-color: #007bff; }
+        .image-item img { width: 120px; height: 120px; object-fit: cover; display: block; }
+        .image-item .checkbox { position: absolute; top: 5px; right: 5px; }
+        .image-item .group-badge { position: absolute; top: 5px; left: 5px; background: #007bff; color: white; padding: 2px 6px; border-radius: 10px; font-size: 12px; }
+        
+        .groups-section { background: white; border-radius: 8px; padding: 20px; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .groups-list { display: flex; flex-wrap: wrap; gap: 20px; margin: 20px 0; }
+        .group-card { border: 2px solid #ddd; border-radius: 8px; padding: 15px; min-width: 250px; }
+        .group-card.active { border-color: #007bff; background: #f8f9fa; }
+        .group-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .group-name { font-weight: bold; font-size: 16px; }
+        .group-count { color: #666; font-size: 12px; }
+        .group-images { display: flex; flex-wrap: wrap; gap: 5px; }
+        .group-images img { width: 40px; height: 40px; object-fit: cover; border-radius: 4px; }
+        
+        .controls { text-align: center; margin: 20px 0; }
+        .controls input { padding: 8px; margin: 0 10px; border: 1px solid #ddd; border-radius: 4px; }
+        
+        .processing-status { background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 15px; border-radius: 4px; margin: 20px 0; }
+        .processing-status.success { background: #d4edda; border-color: #c3e6cb; color: #155724; }
+        .processing-status.error { background: #f8d7da; border-color: #f5c6cb; color: #721c24; }
+        
+        .config-section { background: white; border-radius: 8px; padding: 20px; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .form-group { margin: 10px 0; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
+        .form-group input { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        
+        .hidden { display: none; }
+        
+        @media (max-width: 768px) {
+            .images-container { justify-content: center; }
+            .groups-list { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Photo Organizer & OCR</h1>
+            <p>Upload photos, group them visually, then process with OCR and AI transcription</p>
+        </div>
+
+        <!-- Upload Section -->
+        <div class="upload-area" id="uploadArea">
+            <div>
+                <h3>Drop photos here or click to select</h3>
+                <input type="file" id="fileInput" multiple accept="image/*" style="display: none;">
+                <button class="btn" onclick="document.getElementById('fileInput').click()">Choose Files</button>
+            </div>
+        </div>
+
+        <!-- Uploaded Images Section -->
+        <div class="uploaded-images" id="uploadedImagesSection" style="display: none;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3>Uploaded Images</h3>
+                <div>
+                    <button class="btn btn-secondary" onclick="selectAll()">Select All</button>
+                    <button class="btn btn-secondary" onclick="selectNone()">Select None</button>
+                    <button class="btn btn-danger" onclick="clearAllImages()">Clear All</button>
+                </div>
+            </div>
+            <div class="images-container" id="imagesContainer"></div>
+        </div>
+
+        <!-- Grouping Controls -->
+        <div class="controls" id="groupingControls" style="display: none;">
+            <input type="text" id="groupNameInput" placeholder="Group name (optional)">
+            <button class="btn" onclick="createGroup()">Create Group with Selected</button>
+            <button class="btn btn-secondary" onclick="addToActiveGroup()">Add to Active Group</button>
+        </div>
+
+        <!-- Groups Section -->
+        <div class="groups-section" id="groupsSection" style="display: none;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3>Image Groups</h3>
+                <div>
+                    <button class="btn btn-danger" onclick="clearAllGroups()">Clear All Groups</button>
+                </div>
+            </div>
+            <div class="groups-list" id="groupsList"></div>
+        </div>
+
+        <!-- Processing Section -->
+        <div class="controls">
+            <button class="btn btn-success" onclick="processGroups()" style="font-size: 18px; padding: 15px 30px;">
+                🚀 Process All Groups
+            </button>
+        </div>
+
+        <!-- Status Section -->
+        <div id="statusSection"></div>
+
+        <!-- Configuration -->
+        <div class="config-section">
+            <h3>Configuration</h3>
+            <div class="form-group">
+                <label>Output Folder:</label>
+                <input type="text" id="outputFolder" value="./markdown_output">
+            </div>
+            <button class="btn" onclick="updateConfig()">Update Config</button>
+        </div>
+    </div>
+
+    <script>
+        let uploadedImages = [];
+        let imageGroups = [];
+        let activeGroupId = null;
+
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', function() {
+            loadConfig();
+            setupUploadHandlers();
+        });
+
+        function setupUploadHandlers() {
+            const uploadArea = document.getElementById('uploadArea');
+            const fileInput = document.getElementById('fileInput');
+
+            // Drag and drop
+            uploadArea.addEventListener('dragover', function(e) {
+                e.preventDefault();
+                uploadArea.classList.add('dragover');
+            });
+
+            uploadArea.addEventListener('dragleave', function(e) {
+                e.preventDefault();
+                uploadArea.classList.remove('dragover');
+            });
+
+            uploadArea.addEventListener('drop', function(e) {
+                e.preventDefault();
+                uploadArea.classList.remove('dragover');
+                handleFiles(e.dataTransfer.files);
+            });
+
+            // File input change
+            fileInput.addEventListener('change', function(e) {
+                handleFiles(e.target.files);
+            });
+
+            // Click to open file dialog
+            uploadArea.addEventListener('click', function() {
+                fileInput.click();
+            });
+        }
+
+        function handleFiles(files) {
+            const formData = new FormData();
+            for (let file of files) {
+                formData.append('files', file);
+            }
+
+            fetch('/api/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.files) {
+                    uploadedImages = [...uploadedImages, ...data.files.map(f => ({...f, selected: false, groupId: null}))];
+                    displayImages();
+                    showSection('uploadedImagesSection');
+                    showSection('groupingControls');
+                }
+            })
+            .catch(error => {
+                console.error('Upload error:', error);
+                showStatus('Upload failed', 'error');
+            });
+        }
+
+        function displayImages() {
+            const container = document.getElementById('imagesContainer');
+            container.innerHTML = '';
+
+            uploadedImages.forEach((image, index) => {
+                const div = document.createElement('div');
+                div.className = `image-item ${image.selected ? 'selected' : ''}`;
+                div.innerHTML = `
+                    <img src="${image.path}" alt="${image.name}">
+                    <input type="checkbox" class="checkbox" ${image.selected ? 'checked' : ''} 
+                           onchange="toggleImageSelection(${index})">
+                    ${image.groupId !== null ? `<div class="group-badge">G${image.groupId + 1}</div>` : ''}
+                `;
+                div.onclick = (e) => {
+                    if (e.target.type !== 'checkbox') {
+                        toggleImageSelection(index);
+                    }
+                };
+                container.appendChild(div);
+            });
+        }
+
+        function toggleImageSelection(index) {
+            uploadedImages[index].selected = !uploadedImages[index].selected;
+            displayImages();
+        }
+
+        function selectAll() {
+            uploadedImages.forEach(img => img.selected = true);
+            displayImages();
+        }
+
+        function selectNone() {
+            uploadedImages.forEach(img => img.selected = false);
+            displayImages();
+        }
+
+        function getSelectedImages() {
+            return uploadedImages.filter(img => img.selected);
+        }
+
+        function createGroup() {
+            const selected = getSelectedImages();
+            if (selected.length === 0) {
+                alert('Please select at least one image');
+                return;
+            }
+
+            const groupName = document.getElementById('groupNameInput').value.trim() || `Group ${imageGroups.length + 1}`;
+            const newGroup = {
+                id: imageGroups.length,
+                name: groupName,
+                images: selected.map(img => img.name)
+            };
+
+            // Update image group assignments
+            selected.forEach(img => {
+                const index = uploadedImages.findIndex(ui => ui.name === img.name);
+                if (index !== -1) {
+                    uploadedImages[index].groupId = newGroup.id;
+                    uploadedImages[index].selected = false;
+                }
+            });
+
+            imageGroups.push(newGroup);
+            document.getElementById('groupNameInput').value = '';
+            
+            displayImages();
+            displayGroups();
+            showSection('groupsSection');
+        }
+
+        function addToActiveGroup() {
+            if (activeGroupId === null) {
+                alert('Please select an active group first');
+                return;
+            }
+
+            const selected = getSelectedImages();
+            if (selected.length === 0) {
+                alert('Please select at least one image');
+                return;
+            }
+
+            // Add images to active group
+            selected.forEach(img => {
+                const index = uploadedImages.findIndex(ui => ui.name === img.name);
+                if (index !== -1) {
+                    uploadedImages[index].groupId = activeGroupId;
+                    uploadedImages[index].selected = false;
+                }
+                
+                if (!imageGroups[activeGroupId].images.includes(img.name)) {
+                    imageGroups[activeGroupId].images.push(img.name);
+                }
+            });
+
+            displayImages();
+            displayGroups();
+        }
+
+        function displayGroups() {
+            const container = document.getElementById('groupsList');
+            container.innerHTML = '';
+
+            imageGroups.forEach((group, index) => {
+                const div = document.createElement('div');
+                div.className = `group-card ${activeGroupId === index ? 'active' : ''}`;
+                div.innerHTML = `
+                    <div class="group-header">
+                        <span class="group-name">${group.name}</span>
+                        <div>
+                            <span class="group-count">${group.images.length} images</span>
+                            <button class="btn btn-danger" onclick="deleteGroup(${index})" style="padding: 2px 8px; margin-left: 5px;">×</button>
+                        </div>
+                    </div>
+                    <div class="group-images">
+                        ${group.images.map(imgName => {
+                            const img = uploadedImages.find(ui => ui.name === imgName);
+                            return img ? `<img src="${img.path}" alt="${imgName}">` : '';
+                        }).join('')}
+                    </div>
+                `;
+                div.onclick = (e) => {
+                    if (!e.target.classList.contains('btn')) {
+                        setActiveGroup(index);
+                    }
+                };
+                container.appendChild(div);
+            });
+        }
+
+        function setActiveGroup(groupId) {
+            activeGroupId = activeGroupId === groupId ? null : groupId;
+            displayGroups();
+        }
+
+        function deleteGroup(groupId) {
+            if (!confirm(`Delete ${imageGroups[groupId].name}?`)) return;
+
+            // Remove group assignment from images
+            uploadedImages.forEach(img => {
+                if (img.groupId === groupId) {
+                    img.groupId = null;
+                } else if (img.groupId > groupId) {
+                    img.groupId -= 1;
+                }
+            });
+
+            imageGroups.splice(groupId, 1);
+            
+            // Update group IDs
+            imageGroups.forEach((group, index) => {
+                group.id = index;
+            });
+
+            if (activeGroupId === groupId) {
+                activeGroupId = null;
+            } else if (activeGroupId > groupId) {
+                activeGroupId -= 1;
+            }
+
+            displayImages();
+            displayGroups();
+
+            if (imageGroups.length === 0) {
+                hideSection('groupsSection');
+            }
+        }
+
+        function clearAllImages() {
+            if (!confirm('Clear all uploaded images?')) return;
+
+            fetch('/api/clear_temp', { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                uploadedImages = [];
+                imageGroups = [];
+                activeGroupId = null;
+                hideSection('uploadedImagesSection');
+                hideSection('groupingControls');
+                hideSection('groupsSection');
+                showStatus('All images cleared', 'success');
+            })
+            .catch(error => {
+                console.error('Clear error:', error);
+                showStatus('Failed to clear images', 'error');
+            });
+        }
+
+        function clearAllGroups() {
+            if (!confirm('Clear all groups? (Images will remain uploaded)')) return;
+
+            uploadedImages.forEach(img => {
+                img.groupId = null;
+                img.selected = false;
+            });
+            imageGroups = [];
+            activeGroupId = null;
+
+            displayImages();
+            hideSection('groupsSection');
+        }
+
+        function processGroups() {
+            if (imageGroups.length === 0) {
+                alert('Please create at least one group before processing');
+                return;
+            }
+
+            showStatus(`Processing ${imageGroups.length} groups... This may take several minutes.`, 'info');
+            
+            fetch('/api/process', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ groups: imageGroups })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.message) {
+                    showStatus(data.message, 'success');
+                    // Clear everything after successful processing
+                    uploadedImages = [];
+                    imageGroups = [];
+                    activeGroupId = null;
+                    hideSection('uploadedImagesSection');
+                    hideSection('groupingControls');
+                    hideSection('groupsSection');
+                } else if (data.error) {
+                    showStatus(`Error: ${data.error}`, 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Process error:', error);
+                showStatus('Processing failed', 'error');
+            });
+        }
+
+        function loadConfig() {
+            fetch('/api/config')
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('outputFolder').value = data.output_folder || './markdown_output';
+            })
+            .catch(error => {
+                console.error('Load config error:', error);
+            });
+        }
+
+        function updateConfig() {
+            const config = {
+                output_folder: document.getElementById('outputFolder').value
+            };
+
+            fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            })
+            .then(response => response.json())
+            .then(data => {
+                showStatus('Configuration updated', 'success');
+            })
+            .catch(error => {
+                console.error('Update config error:', error);
+                showStatus('Failed to update configuration', 'error');
+            });
+        }
+
+        function showSection(sectionId) {
+            document.getElementById(sectionId).style.display = 'block';
+        }
+
+        function hideSection(sectionId) {
+            document.getElementById(sectionId).style.display = 'none';
+        }
+
+        function showStatus(message, type = 'info') {
+            const statusSection = document.getElementById('statusSection');
+            statusSection.innerHTML = `<div class="processing-status ${type}">${message}</div>`;
+            
+            // Auto-hide after 5 seconds for success messages
+            if (type === 'success') {
+                setTimeout(() => {
+                    statusSection.innerHTML = '';
+                }, 5000);
+            }
+        }
+    </script>
+</body>
+</html>
