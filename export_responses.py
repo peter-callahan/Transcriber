@@ -2,8 +2,19 @@ import os
 import shutil
 import json
 
-# Define the output directory
-output_dir = "./markdown_output"
+# Load config with fallback
+try:
+    with open('config.json', 'r') as f:
+        config = json.load(f)
+    output_dir = config.get('output_folder', './markdown_output')
+except FileNotFoundError:
+    # Default fallback when config.json doesn't exist
+    output_dir = "./markdown_output"
+
+# Expand tilde (~) for home directory if present
+output_dir = os.path.expanduser(output_dir)
+
+# Create the output directory
 os.makedirs(output_dir, exist_ok=True)
 
 # Load the JSON data

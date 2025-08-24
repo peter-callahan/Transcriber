@@ -6,6 +6,11 @@ from werkzeug.utils import secure_filename
 import subprocess
 from pathlib import Path
 from dotenv import load_dotenv
+from PIL import Image
+from pillow_heif import register_heif_opener
+
+# Register HEIF/HEIC format support
+register_heif_opener()
 
 # Load environment variables for Flask app
 load_dotenv()
@@ -16,9 +21,9 @@ app = Flask(__name__)
 with open('config.json', 'r') as f:
     config = json.load(f)
 
-INPUT_FOLDER = config['input_folder']
-OUTPUT_FOLDER = config['output_folder']
-TEMP_FOLDER = config['temp_folder']
+INPUT_FOLDER = os.path.expanduser(config['input_folder'])
+OUTPUT_FOLDER = os.path.expanduser(config['output_folder'])
+TEMP_FOLDER = os.path.expanduser(config['temp_folder'])
 
 # Create folders if they don't exist
 os.makedirs(INPUT_FOLDER, exist_ok=True)
@@ -30,6 +35,26 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'heic'}
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def convert_heic_to_jpeg(file_path):
+    """Convert HEIC file to JPEG for browser compatibility"""
+    try:
+        with Image.open(file_path) as img:
+            # Convert to RGB if needed and save as JPEG
+            if img.mode in ('RGBA', 'LA', 'P'):
+                img = img.convert('RGB')
+            
+            # Generate new filename with .jpg extension
+            base_name = os.path.splitext(file_path)[0]
+            jpeg_path = f"{base_name}.jpg"
+            img.save(jpeg_path, "JPEG", quality=85)
+            
+            # Remove original HEIC file
+            os.remove(file_path)
+            return jpeg_path, True
+    except Exception as e:
+        print(f"Error converting HEIC file {file_path}: {e}")
+        return file_path, False
 
 
 @app.route('/')
@@ -58,6 +83,14 @@ def upload_files():
             filename = secure_filename(file.filename)
             file_path = os.path.join(TEMP_FOLDER, filename)
             file.save(file_path)
+            
+            # Convert HEIC to JPEG for browser compatibility
+            if filename.lower().endswith('.heic'):
+                converted_path, success = convert_heic_to_jpeg(file_path)
+                if success:
+                    filename = os.path.basename(converted_path)
+                    file_path = converted_path
+            
             uploaded_files.append({
                 'name': filename,
                 'path': f'/api/temp/{filename}'

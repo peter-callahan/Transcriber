@@ -51,7 +51,7 @@ def empty_subfolders(root_folder):
 try:
     with open('config.json', 'r') as f:
         config = json.load(f)
-    input_folder = config['input_folder']
+    input_folder = os.path.expanduser(config['input_folder'])
 except FileNotFoundError:
     # Default fallback when config.json doesn't exist
     input_folder = "input_images"

@@ -43,7 +43,7 @@ def resize_image(image_path, max_size=(1024, 1024)):
 try:
     with open('config.json', 'r') as f:
         config = json.load(f)
-    input_folder = config['input_folder']
+    input_folder = os.path.expanduser(config['input_folder'])
 except FileNotFoundError:
     # Default fallback when config.json doesn't exist
     input_folder = "input_images"
