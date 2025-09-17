@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 from dotenv import load_dotenv
 from google.cloud import vision_v1 as vision
@@ -61,17 +62,23 @@ def extract_text_from_image(image_path, output_path, prompt=None):
     print(f"Text extracted and saved to {output_path}")
 
 
-# Example usage
-if __name__ == "__main__":
-    # Process all folders inside 'input_images'
+# Load config with fallback
+try:
+    with open('config.json', 'r') as f:
+        config = json.load(f)
+    input_images_dir = os.path.expanduser(config['input_folder'])
+except FileNotFoundError:
+    # Default fallback when config.json doesn't exist
     input_images_dir = "input_images"
 
-    for folder_name in os.listdir(input_images_dir):
-
-        folder_path = os.path.join(input_images_dir, folder_name)
-
-        if os.path.isdir(folder_path):
-
+if __name__ == "__main__":
+    # Check if specific group was provided as argument
+    if len(sys.argv) > 1:
+        group_name = sys.argv[1]
+        # Process only the specified group folder
+        folder_path = os.path.join(input_images_dir, group_name)
+        if os.path.exists(folder_path) and os.path.isdir(folder_path):
+            print(f"Processing OCR for group: {group_name}")
             for image_file in os.listdir(folder_path):
                 image_path = os.path.join(folder_path, image_file)
                 if os.path.isfile(image_path) and image_file.lower().endswith((".jpg", ".jpeg", ".png", ".heic")):
@@ -80,5 +87,23 @@ if __name__ == "__main__":
                     output_path = os.path.join(folder_path, f"{base_name}.txt")
 
                     # Extract text from the image and save it
-                    extract_text_from_image(
-                        image_path, output_path, prompt=None)
+                    extract_text_from_image(image_path, output_path, prompt=None)
+        else:
+            print(f"Group folder {group_name} not found")
+            sys.exit(1)
+    else:
+        # Process all folders (original behavior)
+        print("Processing OCR for all groups")
+        for folder_name in os.listdir(input_images_dir):
+            folder_path = os.path.join(input_images_dir, folder_name)
+
+            if os.path.isdir(folder_path):
+                for image_file in os.listdir(folder_path):
+                    image_path = os.path.join(folder_path, image_file)
+                    if os.path.isfile(image_path) and image_file.lower().endswith((".jpg", ".jpeg", ".png", ".heic")):
+                        # Generate the output text file name
+                        base_name, _ = os.path.splitext(image_file)
+                        output_path = os.path.join(folder_path, f"{base_name}.txt")
+
+                        # Extract text from the image and save it
+                        extract_text_from_image(image_path, output_path, prompt=None)

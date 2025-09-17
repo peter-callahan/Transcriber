@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import sys
 import openai
 import hashlib
 import unicodedata
@@ -110,8 +111,14 @@ def get_mock_response():
     }
 
 
-# Traverse 'input_images' for all subfolders and process all image files
-input_images_dir = "input_images"
+# Load config with fallback
+try:
+    with open('config.json', 'r') as f:
+        config = json.load(f)
+    input_images_dir = os.path.expanduser(config['input_folder'])
+except FileNotFoundError:
+    # Default fallback when config.json doesn't exist
+    input_images_dir = "input_images"
 image_paths = []
 
 for root, _, files in os.walk(input_images_dir):
@@ -162,116 +169,130 @@ except (FileNotFoundError, json.JSONDecodeError):
     responses = {}
 
 
-for root, dirs, files in os.walk(input_images_dir):
+# Check if specific group was provided as argument
+if len(sys.argv) > 1:
+    group_name = sys.argv[1]
+    # Process only the specified group folder
+    folders_to_process = [group_name]
+    print(f"Processing GPT conversion for group: {group_name}")
+else:
+    # Process all folders (original behavior)
+    folders_to_process = [d for d in os.listdir(input_images_dir) if os.path.isdir(os.path.join(input_images_dir, d))]
+    print("Processing GPT conversion for all groups")
 
-    for folder in dirs:
-        folder_path = os.path.join(root, folder)
-        folder_texts = []
-        folder_images = []
-        image_list = []
+for folder in folders_to_process:
+    folder_path = os.path.join(input_images_dir, folder)
+    
+    # Skip if folder doesn't exist (for single group mode)
+    if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
+        print(f"Group folder {folder} not found, skipping")
+        continue
+    
+    folder_texts = []
+    folder_images = []
+    image_list = []
 
-        for image_file in os.listdir(folder_path):
+    for image_file in os.listdir(folder_path):
+        image_path = os.path.join(folder_path, image_file)
 
-            image_path = os.path.join(folder_path, image_file)
+        if image_file.lower().endswith((".jpg", ".jpeg", ".png", ".heic")):
+            image_list.append(image_file)
+            base64_image = encode_image(image_path)
+            folder_images.append({"type": "image_url", "image_url": {
+                                 "url": f"data:image/jpeg;base64,{base64_image}"}})
 
-            if image_file.lower().endswith((".jpg", ".jpeg", ".png", ".heic")):
-                image_list.append(image_file)
-                base64_image = encode_image(image_path)
-                folder_images.append({"type": "image_url", "image_url": {
-                                     "url": f"data:image/jpeg;base64,{base64_image}"}})
+            # Create the text file path
+            extracted_text_file = create_text_path(image_path)
+            if os.path.exists(extracted_text_file):
+                with open(extracted_text_file, "r") as file:
+                    extracted_text = file.read()
+                    folder_texts.append(extracted_text)
 
-                # Create the text file path
-                extracted_text_file = create_text_path(image_path)
-                if os.path.exists(extracted_text_file):
-                    with open(extracted_text_file, "r") as file:
-                        extracted_text = file.read()
-                        folder_texts.append(extracted_text)
+    if folder_texts or folder_images:
+        combined_content = []
 
-        if folder_texts or folder_images:
-            combined_content = []
+        # Add the prompt as the first piece of content
+        combined_content.append({"type": "text", "text": prompt})
 
-            # Add the prompt as the first piece of content
-            combined_content.append({"type": "text", "text": prompt})
+        # Pair each image with its corresponding text
+        for image, text in zip(folder_images, folder_texts):
+            combined_content.append({"type": "text", "text": text})
+            combined_content.append(image)
 
-            # Pair each image with its corresponding text
-            for image, text in zip(folder_images, folder_texts):
-                combined_content.append({"type": "text", "text": text})
-                combined_content.append(image)
+        # Add any remaining images or texts if they are unmatched
+        for remaining_image in folder_images[len(folder_texts):]:
+            combined_content.append(remaining_image)
 
-            # Add any remaining images or texts if they are unmatched
-            for remaining_image in folder_images[len(folder_texts):]:
-                combined_content.append(remaining_image)
+        for remaining_text in folder_texts[len(folder_images):]:
+            combined_content.append(
+                {"type": "text", "text": remaining_text})
 
-            for remaining_text in folder_texts[len(folder_images):]:
-                combined_content.append(
-                    {"type": "text", "text": remaining_text})
+        uuid = generate_uuid(image_list, model)
 
-            uuid = generate_uuid(image_list, model)
-
-            # Check if UUID already exists in cache
-            if uuid in responses:
-                print(f"UUID {uuid} found in cache. Serving from cache.")
-                response_dict = responses[uuid]
+        # Check if UUID already exists in cache
+        if uuid in responses:
+            print(f"UUID {uuid} found in cache. Serving from cache.")
+            response_dict = responses[uuid]
+        else:
+            if mock_mode:
+                response_dict = get_mock_response()
             else:
-                if mock_mode:
-                    response_dict = get_mock_response()
-                else:
-                    response = client.chat.completions.create(
-                        model=model,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": combined_content
-                            }
-                        ],
-                        max_tokens=10000
-                    )
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": combined_content
+                        }
+                    ],
+                    max_tokens=10000
+                )
 
-                    response_dict = response.model_dump()
+                response_dict = response.model_dump()
 
-                print(response_dict)
+            print(response_dict)
 
-                metadata_dict = response_dict['choices'][0]['message']['content']
+            metadata_dict = response_dict['choices'][0]['message']['content']
 
-                # Clean the response content comprehensively
-                content = clean_json_text(metadata_dict)
+            # Clean the response content comprehensively
+            content = clean_json_text(metadata_dict)
 
-                try:
-                    metadata_dict = json.loads(content)
-                    is_valid_json = True
-                except json.JSONDecodeError as e:
-                    is_valid_json = False
-                    print(
-                        f"WARNING!!! The response content is not valid JSON. {e}")
-                    print(f"Raw content: {repr(metadata_dict)}")
-                    print(f"Cleaned content: {repr(content)}")
-                    # Print the specific error location if available
-                    if hasattr(e, 'lineno') and hasattr(e, 'colno'):
-                        lines = content.split('\n')
-                        if e.lineno <= len(lines):
-                            problem_line = lines[e.lineno - 1]
-                            print(
-                                f"Error at line {e.lineno}, column {e.colno}: {problem_line}")
-                            print(
-                                f"Error character: {repr(problem_line[e.colno-1:e.colno+10] if e.colno <= len(problem_line) else 'EOF')}")
-                    metadata_dict = {}
-
-                responses[uuid] = response_dict
-                responses[uuid]['is_valid_json'] = is_valid_json
-                responses[uuid]['metadata'] = {
-                    'title': metadata_dict.get('title'),
-                    'transcription': metadata_dict.get('transcription'),
-                    'date': metadata_dict.get('date'),
-                    'tags': metadata_dict.get('tags'),
-                    'upload_date': datetime.now().isoformat(),
-                }
-
-                # Add image paths to the response dictionary
-                response_dict["image_paths"] = [os.path.join(
-                    folder_path, img) for img in image_list]
-
-                with open(responses_file, "w") as json_file:
-                    json.dump(responses, json_file, indent=4)
-
+            try:
+                metadata_dict = json.loads(content)
+                is_valid_json = True
+            except json.JSONDecodeError as e:
+                is_valid_json = False
                 print(
-                    f"Response for folder {folder} saved and appended to JSON file.")
+                    f"WARNING!!! The response content is not valid JSON. {e}")
+                print(f"Raw content: {repr(metadata_dict)}")
+                print(f"Cleaned content: {repr(content)}")
+                # Print the specific error location if available
+                if hasattr(e, 'lineno') and hasattr(e, 'colno'):
+                    lines = content.split('\n')
+                    if e.lineno <= len(lines):
+                        problem_line = lines[e.lineno - 1]
+                        print(
+                            f"Error at line {e.lineno}, column {e.colno}: {problem_line}")
+                        print(
+                            f"Error character: {repr(problem_line[e.colno-1:e.colno+10] if e.colno <= len(problem_line) else 'EOF')}")
+                metadata_dict = {}
+
+            responses[uuid] = response_dict
+            responses[uuid]['is_valid_json'] = is_valid_json
+            responses[uuid]['metadata'] = {
+                'title': metadata_dict.get('title'),
+                'transcription': metadata_dict.get('transcription'),
+                'date': metadata_dict.get('date'),
+                'tags': metadata_dict.get('tags'),
+                'upload_date': datetime.now().isoformat(),
+            }
+
+            # Add image paths to the response dictionary
+            response_dict["image_paths"] = [os.path.join(
+                folder_path, img) for img in image_list]
+
+            with open(responses_file, "w") as json_file:
+                json.dump(responses, json_file, indent=4)
+
+            print(
+                f"Response for folder {folder} saved and appended to JSON file.")
