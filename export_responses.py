@@ -2,6 +2,7 @@ import os
 import shutil
 import json
 import logging
+import re
 
 # Configure logging
 logging.basicConfig(
@@ -9,6 +10,31 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def sanitize_filename(filename):
+    """
+    Sanitize a string to be safe for use as a filename/folder name.
+    Removes or replaces characters that are invalid in file paths.
+    """
+    if not filename:
+        return 'Untitled'
+
+    # Replace problematic characters with underscores
+    # This includes: / \ : * ? " < > |
+    sanitized = re.sub(r'[/\\:*?"<>|]', '_', filename)
+
+    # Replace multiple underscores with single underscore
+    sanitized = re.sub(r'_+', '_', sanitized)
+
+    # Remove leading/trailing underscores and spaces
+    sanitized = sanitized.strip('_ ')
+
+    # Ensure we have a valid filename
+    if not sanitized:
+        sanitized = 'Untitled'
+
+    return sanitized
 
 # Load config with fallback
 try:
@@ -43,8 +69,8 @@ for uuid, response_data in responses.items():
         transcription = entry_data.get('transcription') or 'No transcription available'
         
         # Create safe folder name with proper null handling
-        safe_title = title.replace(' ', '_') if title else 'Untitled'
-        safe_date = date.replace(' ', '_') if date else 'Unknown_Date'
+        safe_title = sanitize_filename(title) if title else 'Untitled'
+        safe_date = sanitize_filename(date) if date else 'Unknown_Date'
         folder_name = f"{safe_title}_{safe_date}"
         
         markdown_content = f"# {title}\n\n"

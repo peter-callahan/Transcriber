@@ -152,7 +152,8 @@ I want you to add an additional annotation that includes the date of the text (i
 and provide between 1 and 3 tags that indicates the approximate subject matter. Also, create a title for the note that helps
 something about the note that will make it more memorable to me.
 Output everything in markdown format, but don't include ```markdown code tags, just use the markdown syntax.
-(DO NOT wrap in markdown code blocks, return ONLY the raw JSON).'''
+(DO NOT wrap in markdown code blocks, return ONLY the raw JSON).
+All dates should be in the format DD-MMM-YYYY, such as 1-Aug-2025'''
 
 tag_guidance = ""
 if obsidian_tags:
@@ -238,6 +239,9 @@ for folder in folders_to_process:
 
         uuid = generate_uuid(image_list, model)
 
+        with open('temp_output.json', 'w') as f:
+            json.dump(combined_content, f, indent=4)
+
         # Check if UUID already exists in cache
         if uuid in responses:
             logger.info(f"UUID {uuid} found in cache. Serving from cache.")
@@ -271,7 +275,8 @@ for folder in folders_to_process:
                 is_valid_json = True
             except json.JSONDecodeError as e:
                 is_valid_json = False
-                logger.error(f"WARNING!!! The response content is not valid JSON. {e}")
+                logger.error(
+                    f"WARNING!!! The response content is not valid JSON. {e}")
                 logger.error(f"Raw content: {repr(metadata_dict)}")
                 logger.error(f"Cleaned content: {repr(content)}")
                 # Print the specific error location if available
@@ -279,8 +284,10 @@ for folder in folders_to_process:
                     lines = content.split('\n')
                     if e.lineno <= len(lines):
                         problem_line = lines[e.lineno - 1]
-                        logger.error(f"Error at line {e.lineno}, column {e.colno}: {problem_line}")
-                        logger.error(f"Error character: {repr(problem_line[e.colno-1:e.colno+10] if e.colno <= len(problem_line) else 'EOF')}")
+                        logger.error(
+                            f"Error at line {e.lineno}, column {e.colno}: {problem_line}")
+                        logger.error(
+                            f"Error character: {repr(problem_line[e.colno-1:e.colno+10] if e.colno <= len(problem_line) else 'EOF')}")
                 metadata_dict = {}
 
             responses[uuid] = response_dict
@@ -300,4 +307,5 @@ for folder in folders_to_process:
             with open(responses_file, "w") as json_file:
                 json.dump(responses, json_file, indent=4)
 
-            logger.info(f"Response for folder {folder} saved and appended to JSON file.")
+            logger.info(
+                f"Response for folder {folder} saved and appended to JSON file.")
