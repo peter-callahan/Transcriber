@@ -177,17 +177,18 @@ if len(sys.argv) > 1:
     print(f"Processing GPT conversion for group: {group_name}")
 else:
     # Process all folders (original behavior)
-    folders_to_process = [d for d in os.listdir(input_images_dir) if os.path.isdir(os.path.join(input_images_dir, d))]
+    folders_to_process = [d for d in os.listdir(
+        input_images_dir) if os.path.isdir(os.path.join(input_images_dir, d))]
     print("Processing GPT conversion for all groups")
 
 for folder in folders_to_process:
     folder_path = os.path.join(input_images_dir, folder)
-    
+
     # Skip if folder doesn't exist (for single group mode)
     if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
         print(f"Group folder {folder} not found, skipping")
         continue
-    
+
     folder_texts = []
     folder_images = []
     image_list = []
