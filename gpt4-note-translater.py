@@ -13,6 +13,7 @@ from datetime import datetime
 from PIL import Image
 from obsidian_tags import load_saved_tags
 from dotenv import load_dotenv
+from itertools import chain
 
 # Load environment variables from .env file
 load_dotenv()
@@ -35,6 +36,28 @@ def add_suffix_to_path(file_path, suffix):
     base_name, ext = os.path.splitext(file_name)
     new_file_name = f"{base_name}{suffix}{ext}"
     return os.path.join(directory, new_file_name)
+
+
+def parse_date_string(date_str):
+    """Try multiple formats and coerce to DD-MMM-YYYY."""
+    date_formats = [
+        "%d-%b-%Y",      # 1-Aug-2025
+        "%d/%m/%Y",      # 01/08/2025
+        "%Y-%m-%d",      # 2025-08-01
+        "%m/%d/%Y",      # 08/01/2025
+        "%d %b %Y",      # 1 Aug 2025
+        "%b %d, %Y",     # Aug 1, 2025
+        "%Y.%m.%d",      # 2025.08.01
+        "%d.%m.%Y",      # 01.08.2025
+        # Add more as needed
+    ]
+    for fmt in date_formats:
+        try:
+            dt = datetime.strptime(date_str.strip(), fmt)
+            return dt.strftime("%d-%b-%Y")
+        except Exception:
+            continue
+    return None  # Could not parse
 
 
 def generate_uuid(filenames, model):
@@ -119,6 +142,57 @@ def get_mock_response():
     }
 
 
+def combine_responses(individual_responses):
+    """
+    Combine multiple individual GPT responses into a single unified response.
+    Each response should contain parsed metadata with title, transcription, date, tags.
+    """
+    if not individual_responses:
+        return {}
+
+    # Collect all valid parsed responses
+    valid_responses = []
+    all_tags = []
+    dates = []
+
+    for response_data in individual_responses:
+        valid_responses.append(response_data['transcription']['transcription'])
+        all_tags.append(response_data['transcription'].get('tags', []))
+        dates.append(response_data['transcription'].get('date', None))
+
+    if not valid_responses:
+        return {}
+
+    # Combine transcriptions
+    combined_transcription = "\n\n".join(
+        [response for response in valid_responses])
+
+    flat_tags = list(chain.from_iterable(all_tags))
+    unique_tags = list(set(flat_tags))
+
+    if dates:
+        parsed_dates = []
+        for date_str in dates:
+            coerced_date = parse_date_string(date_str) if date_str else None
+            if coerced_date:
+                dt = datetime.strptime(coerced_date, "%d-%b-%Y")
+                parsed_dates.append((dt, coerced_date))
+        if parsed_dates:
+            parsed_dates.sort(key=lambda x: x[0])
+            earliest_date = parsed_dates[0][1]
+        else:
+            earliest_date = dates[0]  # Fallback to first date
+
+    # Create combined metadata
+    combined_metadata = {
+        'transcription': combined_transcription,
+        'date': earliest_date,
+        'tags': unique_tags
+    }
+
+    return combined_metadata
+
+
 # Load config with fallback
 try:
     with open('config.json', 'r') as f:
@@ -143,17 +217,48 @@ model = "gpt-4o"
 obsidian_tags_file = os.getenv('OBSIDIAN_TAGS_FILE', 'obsidian_tags.json')
 obsidian_tags = load_saved_tags(obsidian_tags_file)
 
-# Create the prompt
-base_prompt = '''I am sending you one or more handwritten notes please transcribe them. If there are multiple notes
-treat them as if they were one continuous note and do not summarize them or speculate about their connection.
-Each individual image is accompanied by extracted text from Google Vision API. They have the same filename.
-Use this text file to assist you in transcribing the words accurately. If you see a word crossed out in the image, ignore it.
-I want you to add an additional annotation that includes the date of the text (if present)
-and provide between 1 and 3 tags that indicates the approximate subject matter. Also, create a title for the note that helps
-something about the note that will make it more memorable to me.
-Output everything in markdown format, but don't include ```markdown code tags, just use the markdown syntax.
-(DO NOT wrap in markdown code blocks, return ONLY the raw JSON).
-All dates should be in the format DD-MMM-YYYY, such as 1-Aug-2025'''
+single_image_prompt = '''Here are your directions:
+I am sending you a single handwritten note please transcribe it accurately.
+This image is accompanied by extracted text from Google Vision API with the same filename.
+Use the image and text to assist in transcribing the words accurately. If you see a word crossed out in the image, ignore it.
+Output text in markdown format and wrap it in JSON, using the included template below for structure. Your transcription should replace the <transcription_here> in the template.
+Do not include ```markdown code tags or ```json code tags, otherwise structure using normal JSON containing normal markdown syntax. (DO NOT WRAP in markdown or json code blocks).
+I want you to devise a simple title, based on the content of the note, and insert it into the <title_here> field.
+I want you to add an additional annotation that includes the date of the text (if present), in the <date_here> field.
+'''
+
+multi_prompt = '''Here are your directions:
+I am sending you a combination of previously transcribed notes that I want you to summarize in the following ways.
+Treat the incoming notes as pages in one continuous document where you should add your additional comments in the <summary_here> field.
+I want you to add an additional annotation that includes the date range of the texts present and provide between 1 and 3 tags that indicates the approximate subject matter.
+Create a title for the note that helps summarize the content of the included notes, make it more memorable to me if possible.
+Output the text in markdown format and wrap it in JSON, using the included template below for structure. Your transcription should replace the <transcription_here> in the template.
+I want you to devise a simple title, based on the content of all the notes, and insert it into the <title_here> field.
+I want you to add an additional annotation that includes a date range from the notes (if present), or a single date if there is only one. This should go in the <date_here> field.
+Do not include ```markdown code tags or ```json code tags, otherwise structure using normal JSON containing normal markdown syntax. (DO NOT WRAP in markdown or json code blocks).
+'''
+
+expected_format_single_prompt = '''
+{
+  "title": "<title_here>",
+  "date": "<date_here>",
+  "transcription": "<transcription_here>",
+  "tags": ["<tag1>", "<tag2>", "<tag3>"]
+}
+'''
+
+expected_format_multiprompt = '''
+{
+  "title": "<title_here>",
+  "date": "<date_here>",
+  "summary": "<summary_here>",
+  "tags": ["<tag1>", "<tag2>", "<tag3>"]
+}
+'''
+
+date_format_rules = '''
+All dates should be in the format DD-MMM-YYYY, such as 1-Aug-2025.  Do not include / in dates or any characters that would disrupt their use as a filename.
+'''
 
 tag_guidance = ""
 if obsidian_tags:
@@ -161,15 +266,11 @@ if obsidian_tags:
 When choosing tags, consider using tags from this existing vocabulary when appropriate:
 {", ".join(obsidian_tags)}'''
 
-prompt = base_prompt + tag_guidance + '''
-The output should be in valid JSON format and in the following structure:
-{
-  "title": "Your title here",
-  "transcription": "Your transcription in markdown format here",
-  "date": "Date here (if present, use earliest date if more than one are present)",
-  "tags": ["Tag1", "Tag2"]
-}'''
+single_response_prompt = single_image_prompt + \
+    date_format_rules + expected_format_single_prompt + tag_guidance
 
+multi_response_prompt = multi_prompt + date_format_rules + \
+    expected_format_multiprompt + tag_guidance
 
 try:
     with open(responses_file, "r") as json_file:
@@ -198,8 +299,8 @@ for folder in folders_to_process:
         logger.warning(f"Group folder {folder} not found, skipping")
         continue
 
-    folder_texts = []
-    folder_images = []
+    # Collect image and text pairs
+    image_text_pairs = []
     image_list = []
 
     for image_file in os.listdir(folder_path):
@@ -207,105 +308,145 @@ for folder in folders_to_process:
 
         if image_file.lower().endswith((".jpg", ".jpeg", ".png", ".heic")):
             image_list.append(image_file)
-            base64_image = encode_image(image_path)
-            folder_images.append({"type": "image_url", "image_url": {
-                                 "url": f"data:image/jpeg;base64,{base64_image}"}})
 
-            # Create the text file path
+            # Encode image
+            base64_image = encode_image(image_path)
+            image_data = {"type": "image_url", "image_url": {
+                "url": f"data:image/jpeg;base64,{base64_image}"}}
+
+            # Get corresponding text
+            extracted_text = ""
             extracted_text_file = create_text_path(image_path)
             if os.path.exists(extracted_text_file):
                 with open(extracted_text_file, "r") as file:
                     extracted_text = file.read()
-                    folder_texts.append(extracted_text)
 
-    if folder_texts or folder_images:
-        combined_content = []
+            image_text_pairs.append({
+                'image': image_data,
+                'text': extracted_text,
+                'filename': image_file
+            })
 
-        # Add the prompt as the first piece of content
-        combined_content.append({"type": "text", "text": prompt})
-
-        # Pair each image with its corresponding text
-        for image, text in zip(folder_images, folder_texts):
-            combined_content.append({"type": "text", "text": text})
-            combined_content.append(image)
-
-        # Add any remaining images or texts if they are unmatched
-        for remaining_image in folder_images[len(folder_texts):]:
-            combined_content.append(remaining_image)
-
-        for remaining_text in folder_texts[len(folder_images):]:
-            combined_content.append(
-                {"type": "text", "text": remaining_text})
-
+    if image_text_pairs:
         uuid = generate_uuid(image_list, model)
-
-        with open('temp_output.json', 'w') as f:
-            json.dump(combined_content, f, indent=4)
+        response_dict = {}
 
         # Check if UUID already exists in cache
         if uuid in responses:
             logger.info(f"UUID {uuid} found in cache. Serving from cache.")
             response_dict = responses[uuid]
+
         else:
-            if mock_mode:
-                response_dict = get_mock_response()
-            else:
+            # Process each image/text pair individually
+            individual_responses = []
+
+            for i, pair in enumerate(image_text_pairs):
+                logger.info(
+                    f"Processing image {i+1}/{len(image_text_pairs)}: {pair['filename']}")
+
+                # Create content for this single image
+                single_content = [
+                    {"type": "text", "text": single_response_prompt},
+                    {"type": "text", "text": pair['text']},
+                    pair['image']
+                ]
+
+                try:
+                    if mock_mode:
+                        single_response = get_mock_response()
+                    else:
+                        response = client.chat.completions.create(
+                            model=model,
+                            messages=[
+                                {
+                                    "role": "user",
+                                    "content": single_content
+                                }
+                            ],
+                            max_tokens=10000
+                        )
+                        single_response = response.model_dump()
+
+                    # Parse the individual response
+                    content = single_response['choices'][0]['message']['content']
+                    cleaned_content = clean_json_text(content)
+
+                    try:
+                        cleaned_content = json.loads(cleaned_content)
+                        is_valid_json = True
+                    except json.JSONDecodeError as e:
+                        logger.error(
+                            f"Invalid JSON in response for {pair['filename']}: {e}")
+
+                        # todo: Do something to handle this, try again, or maybe skip??
+
+                        is_valid_json = False
+                        # metadata_dict = {}
+
+                    individual_responses.append({
+                        'response': single_response,
+                        'transcription': cleaned_content,
+                        'is_valid_json': is_valid_json,
+                        'filename': pair['filename']
+                    })
+
+                except Exception as e:
+                    logger.error(f"Error processing {pair['filename']}: {e}")
+                    continue
+
+            # Add summary details for multiple responses
+            response_dict[uuid] = {}
+
+            if len(individual_responses) > 1:
+
+                all_individual_responses = combine_responses(
+                    individual_responses)
+
+                combined_metadata = [
+                    {"type": "text", "text": multi_response_prompt},
+                    {"type": "text", "text": json.dumps(
+                        all_individual_responses, indent=2)}
+                ]
+
+                # todo: make secondary API call that uses the individual calls as an input, the purpose is to add tags and metadata at the level of the combined pages
+
                 response = client.chat.completions.create(
                     model=model,
                     messages=[
                         {
                             "role": "user",
-                            "content": combined_content
+                            "content": combined_metadata
                         }
                     ],
-                    max_tokens=10000
+                    max_tokens=16384
                 )
+                multi_response = response.model_dump()
 
-                response_dict = response.model_dump()
+                logger.info(
+                    f"Combined GPT Response: {len(individual_responses)} individual responses processed")
 
-            logger.info(f"GPT Response: {response_dict}")
+                response_dict[uuid]["image_paths"] = [os.path.join(
+                    folder_path, img) for img in image_list]
 
-            metadata_dict = response_dict['choices'][0]['message']['content']
+                response_content = multi_response['choices'][0]['message']['content']
+                cleaned_content = clean_json_text(response_content)
 
-            # Clean the response content comprehensively
-            content = clean_json_text(metadata_dict)
+                response_dict[uuid]['summary'] = {}
 
-            try:
-                metadata_dict = json.loads(content)
-                is_valid_json = True
-            except json.JSONDecodeError as e:
-                is_valid_json = False
-                logger.error(
-                    f"WARNING!!! The response content is not valid JSON. {e}")
-                logger.error(f"Raw content: {repr(metadata_dict)}")
-                logger.error(f"Cleaned content: {repr(content)}")
-                # Print the specific error location if available
-                if hasattr(e, 'lineno') and hasattr(e, 'colno'):
-                    lines = content.split('\n')
-                    if e.lineno <= len(lines):
-                        problem_line = lines[e.lineno - 1]
-                        logger.error(
-                            f"Error at line {e.lineno}, column {e.colno}: {problem_line}")
-                        logger.error(
-                            f"Error character: {repr(problem_line[e.colno-1:e.colno+10] if e.colno <= len(problem_line) else 'EOF')}")
-                metadata_dict = {}
+                try:
+                    parsed_content = json.loads(cleaned_content)
+                    response_dict[uuid]['summary']['is_valid_json'] = True
+                    response_dict[uuid]['summary']['contents'] = parsed_content
 
-            responses[uuid] = response_dict
-            responses[uuid]['is_valid_json'] = is_valid_json
-            responses[uuid]['metadata'] = {
-                'title': metadata_dict.get('title'),
-                'transcription': metadata_dict.get('transcription'),
-                'date': metadata_dict.get('date'),
-                'tags': metadata_dict.get('tags'),
-                'upload_date': datetime.now().isoformat(),
-            }
+                except json.JSONDecodeError as e:
+                    logger.error(f"Invalid JSON in final response: {e}")
+                    response_dict[uuid]['summary']['is_valid_json'] = False
+                    response_dict[uuid]['summary']['contents'] = response_content
 
-            # Add image paths to the response dictionary
-            response_dict["image_paths"] = [os.path.join(
-                folder_path, img) for img in image_list]
+            response_dict[uuid]['individual_responses'] = individual_responses
 
             with open(responses_file, "w") as json_file:
-                json.dump(responses, json_file, indent=4)
+                json.dump(response_dict, json_file, indent=4)
 
             logger.info(
                 f"Response for folder {folder} saved and appended to JSON file.")
