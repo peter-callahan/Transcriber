@@ -1,6 +1,7 @@
 import os
 import json
 import shutil
+import logging
 from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.utils import secure_filename
 import subprocess
@@ -16,6 +17,13 @@ register_heif_opener()
 load_dotenv()
 
 app = Flask(__name__)
+
+# Configure logging for the Flask app
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Global variable to store processing progress
 processing_progress = {
@@ -65,7 +73,7 @@ def convert_heic_to_jpeg(file_path):
             os.remove(file_path)
             return jpeg_path, True
     except Exception as e:
-        print(f"Error converting HEIC file {file_path}: {e}")
+        logger.error(f"Error converting HEIC file {file_path}: {e}")
         return file_path, False
 
 
@@ -288,7 +296,7 @@ def process_images():
 
         for i, group in enumerate(groups):
             group_name = f"n{i+1}"
-            print(f"Processing group {group_name} ({i+1}/{len(groups)})")
+            logger.info(f"Processing group {group_name} ({i+1}/{len(groups)})")
 
             # Update progress
             processing_progress.update({
@@ -301,10 +309,9 @@ def process_images():
                 # Resize images for this group
                 processing_progress['current_step'] = f'Resizing images for {group_name}'
                 result = subprocess.run(['python', 'process_images.py', group_name],
-                                        capture_output=True, text=True, cwd=os.getcwd())
+                                        cwd=os.getcwd())
                 if result.returncode != 0:
-                    print(
-                        f'Warning: Image processing failed for {group_name}: {result.stderr}')
+                    logger.warning(f'Image processing failed for {group_name}')
                     failed_groups.append(f'{group_name} (image processing)')
                     continue
 
@@ -314,10 +321,9 @@ def process_images():
                 env['GOOGLE_APPLICATION_CREDENTIALS'] = os.getenv(
                     'GOOGLE_APPLICATION_CREDENTIALS')
                 result = subprocess.run(['python', 'googlevision-translater.py', group_name],
-                                        capture_output=True, text=True, cwd=os.getcwd(), env=env)
+                                        cwd=os.getcwd(), env=env)
                 if result.returncode != 0:
-                    print(
-                        f'Warning: OCR processing failed for {group_name}: {result.stderr}')
+                    logger.warning(f'OCR processing failed for {group_name}')
                     failed_groups.append(f'{group_name} (OCR)')
                     continue
 
@@ -327,15 +333,14 @@ def process_images():
                 openai_key = os.getenv('OPENAI_API_KEY')
                 env['OPENAI_API_KEY'] = openai_key
                 result = subprocess.run(['python', 'gpt4-note-translater.py', group_name],
-                                        capture_output=True, text=True, cwd=os.getcwd(), env=env)
+                                        cwd=os.getcwd(), env=env)
                 if result.returncode != 0:
-                    print(
-                        f'Warning: Text conversion failed for {group_name}: {result.stderr}')
+                    logger.warning(f'Text conversion failed for {group_name}')
                     failed_groups.append(f'{group_name} (text conversion)')
                     continue
 
                 completed_groups += 1
-                print(f"Successfully completed group {group_name}")
+                logger.info(f"Successfully completed group {group_name}")
 
                 # Update progress after successful completion
                 processing_progress.update({
@@ -345,7 +350,7 @@ def process_images():
                 })
 
             except Exception as e:
-                print(f'Error processing group {group_name}: {str(e)}')
+                logger.error(f'Error processing group {group_name}: {str(e)}')
                 failed_groups.append(f'{group_name} (error: {str(e)})')
                 continue
 
@@ -353,9 +358,9 @@ def process_images():
         if completed_groups > 0:
             processing_progress['current_step'] = 'Exporting results'
             result = subprocess.run(['python', 'export_responses.py'],
-                                    capture_output=True, text=True, cwd=os.getcwd())
+                                    cwd=os.getcwd())
             if result.returncode != 0:
-                print(f'Warning: Export failed: {result.stderr}')
+                logger.warning('Export failed')
 
         # Step 4: Clear temp files after successful processing
         processing_progress['current_step'] = 'Cleaning up temporary files'

@@ -1,13 +1,21 @@
 import os
 import shutil
 import json
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 def empty_subfolders(root_folder):
     """Empty all subfolders while keeping the folder structure intact."""
 
     if not os.path.exists(root_folder):
-        print(f"Root folder does not exist: {root_folder}")
+        logger.error(f"Root folder does not exist: {root_folder}")
         return
 
     deleted_count = 0
@@ -28,23 +36,23 @@ def empty_subfolders(root_folder):
             try:
                 os.remove(file_path)
                 deleted_count += 1
-                print(f"Deleted: {file} from {subfolder_name}/")
+                logger.info(f"Deleted: {file} from {subfolder_name}/")
             except Exception as e:
-                print(f"Error deleting {file_path}: {e}")
+                logger.error(f"Error deleting {file_path}: {e}")
 
         # Delete any nested subfolders (if any)
         for dir_name in dirs:
             dir_path = os.path.join(root, dir_name)
             try:
                 shutil.rmtree(dir_path)
-                print(f"Deleted subfolder: {dir_name} from {subfolder_name}/")
+                logger.info(f"Deleted subfolder: {dir_name} from {subfolder_name}/")
             except Exception as e:
-                print(f"Error deleting directory {dir_path}: {e}")
+                logger.error(f"Error deleting directory {dir_path}: {e}")
 
-    print(f"\nSummary:")
-    print(f"- Processed {folders_processed} subfolders")
-    print(f"- Deleted {deleted_count} files")
-    print(f"- All subfolders kept intact and empty")
+    logger.info("\nSummary:")
+    logger.info(f"- Processed {folders_processed} subfolders")
+    logger.info(f"- Deleted {deleted_count} files")
+    logger.info("- All subfolders kept intact and empty")
 
 
 # Load config with fallback
@@ -56,12 +64,12 @@ except FileNotFoundError:
     # Default fallback when config.json doesn't exist
     input_folder = "input_images"
 
-print(f"Emptying all subfolders in: {input_folder}")
-print("This will delete ALL files in ALL subfolders!")
+logger.info(f"Emptying all subfolders in: {input_folder}")
+logger.warning("This will delete ALL files in ALL subfolders!")
 confirmation = input("Are you sure you want to continue? (yes/no): ")
 
 if confirmation.lower() in ['yes', 'y']:
     empty_subfolders(input_folder)
-    print("Done!")
+    logger.info("Done!")
 else:
-    print("Operation cancelled.")
+    logger.info("Operation cancelled.")

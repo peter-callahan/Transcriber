@@ -1,11 +1,19 @@
 import os
 import json
 import sys
+import logging
 from PIL import Image
 from pillow_heif import register_heif_opener
 
 # Register HEIF/HEIC format support
 register_heif_opener()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 def resize_image(image_path, max_size=(2048, 2048)):
@@ -21,9 +29,9 @@ def resize_image(image_path, max_size=(2048, 2048)):
                 os.remove(image_path)  # Delete the original file
             else:
                 img.save(image_path, "JPEG", quality=95)  # High quality
-        print(f"Successfully processed: {image_path}")
+        logger.info(f"Successfully processed: {image_path}")
     except Exception as e:
-        print(f"Error processing {image_path}: {e}")
+        logger.error(f"Error processing {image_path}: {e}")
         # Try to convert HEIC using a different method if available
         if image_path.lower().endswith('.heic'):
             try:
@@ -37,9 +45,9 @@ def resize_image(image_path, max_size=(2048, 2048)):
                     new_image_path = os.path.splitext(image_path)[0] + ".jpg"
                     img.save(new_image_path, "JPEG", quality=95)
                     os.remove(image_path)
-                print(f"Successfully processed HEIC on retry: {image_path}")
+                logger.info(f"Successfully processed HEIC on retry: {image_path}")
             except Exception as e2:
-                print(f"Failed to process HEIC file {image_path}: {e2}")
+                logger.error(f"Failed to process HEIC file {image_path}: {e2}")
                 # Skip this file rather than crashing
                 return
 
@@ -59,17 +67,17 @@ if len(sys.argv) > 1:
     # Process only the specified group folder
     group_folder = os.path.join(input_folder, group_name)
     if os.path.exists(group_folder):
-        print(f"Processing images in group: {group_name}")
+        logger.info(f"Processing images in group: {group_name}")
         for image_file in os.listdir(group_folder):
             image_path = os.path.join(group_folder, image_file)
             if os.path.isfile(image_path) and image_file.lower().endswith(('.jpg', '.jpeg', '.png', '.heic')):
                 resize_image(image_path)
     else:
-        print(f"Group folder {group_name} not found")
+        logger.warning(f"Group folder {group_name} not found")
         sys.exit(1)
 else:
     # Process all groups (original behavior)
-    print("Processing all images in input folder")
+    logger.info("Processing all images in input folder")
     for root, _, files in os.walk(input_folder):
         for image_file in files:
             image_path = os.path.join(root, image_file)

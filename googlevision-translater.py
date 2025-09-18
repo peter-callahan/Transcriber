@@ -1,11 +1,19 @@
 import os
 import sys
 import json
+import logging
 from dotenv import load_dotenv
 from google.cloud import vision_v1 as vision
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Ensure Google credentials are set in environment
 if os.getenv('GOOGLE_APPLICATION_CREDENTIALS'):
@@ -59,7 +67,7 @@ def extract_text_from_image(image_path, output_path, prompt=None):
     with open(output_path, "w") as output_file:
         output_file.write(combined_text)
 
-    print(f"Text extracted and saved to {output_path}")
+    logger.info(f"Text extracted and saved to {output_path}")
 
 
 # Load config with fallback
@@ -78,7 +86,7 @@ if __name__ == "__main__":
         # Process only the specified group folder
         folder_path = os.path.join(input_images_dir, group_name)
         if os.path.exists(folder_path) and os.path.isdir(folder_path):
-            print(f"Processing OCR for group: {group_name}")
+            logger.info(f"Processing OCR for group: {group_name}")
             for image_file in os.listdir(folder_path):
                 image_path = os.path.join(folder_path, image_file)
                 if os.path.isfile(image_path) and image_file.lower().endswith((".jpg", ".jpeg", ".png", ".heic")):
@@ -89,11 +97,11 @@ if __name__ == "__main__":
                     # Extract text from the image and save it
                     extract_text_from_image(image_path, output_path, prompt=None)
         else:
-            print(f"Group folder {group_name} not found")
+            logger.warning(f"Group folder {group_name} not found")
             sys.exit(1)
     else:
         # Process all folders (original behavior)
-        print("Processing OCR for all groups")
+        logger.info("Processing OCR for all groups")
         for folder_name in os.listdir(input_images_dir):
             folder_path = os.path.join(input_images_dir, folder_name)
 

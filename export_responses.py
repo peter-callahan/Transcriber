@@ -1,6 +1,14 @@
 import os
 import shutil
 import json
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Load config with fallback
 try:
@@ -75,31 +83,31 @@ for uuid, response_data in responses.items():
     # Get image paths from response data
     image_paths = response_data.get("image_paths", [])
     
-    print(f"Debug: Found {len(image_paths)} image paths for {folder_name}")
-    print(f"Debug: Image paths: {image_paths}")
+    logger.debug(f"Found {len(image_paths)} image paths for {folder_name}")
+    logger.debug(f"Image paths: {image_paths}")
 
     # Copy all relevant images to the 'images' subfolder
     for image_path in image_paths:
-        print(f'Debug: Processing image path: {image_path}')
+        logger.debug(f'Processing image path: {image_path}')
         
         # Handle both absolute and relative paths
         if os.path.exists(image_path):
             try:
                 shutil.copy2(image_path, images_folder_path)
-                print(f'Debug: Successfully copied {os.path.basename(image_path)}')
+                logger.info(f'Successfully copied {os.path.basename(image_path)}')
             except Exception as e:
-                print(f'Debug: Failed to copy {image_path}: {e}')
+                logger.error(f'Failed to copy {image_path}: {e}')
         else:
-            print(f'Debug: Image path does not exist: {image_path}')
+            logger.warning(f'Image path does not exist: {image_path}')
             # Try without the ./ prefix if it exists
             clean_path = image_path.lstrip('./')
             if os.path.exists(clean_path):
                 try:
                     shutil.copy2(clean_path, images_folder_path)
-                    print(f'Debug: Successfully copied {os.path.basename(clean_path)} (cleaned path)')
+                    logger.info(f'Successfully copied {os.path.basename(clean_path)} (cleaned path)')
                 except Exception as e:
-                    print(f'Debug: Failed to copy cleaned path {clean_path}: {e}')
+                    logger.error(f'Failed to copy cleaned path {clean_path}: {e}')
             else:
-                print(f'Debug: Neither original nor cleaned path exists: {image_path} -> {clean_path}')
+                logger.error(f'Neither original nor cleaned path exists: {image_path} -> {clean_path}')
 
-print("Each JSON element has its own folder in markdown_output.")
+logger.info("Each JSON element has its own folder in markdown_output.")

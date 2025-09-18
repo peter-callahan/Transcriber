@@ -7,14 +7,22 @@ Scans a vault for #hashtags and returns them as a sorted list.
 import os
 import re
 import json
+import logging
 from pathlib import Path
 from collections import Counter
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 def get_obsidian_tags(vault_path):
     """Extract hashtags from Obsidian vault with frequency counts."""
     if not vault_path or not os.path.exists(vault_path):
-        print(f"Vault path not found: {vault_path}")
+        logger.error(f"Vault path not found: {vault_path}")
         return Counter()
 
     tag_counter = Counter()
@@ -55,7 +63,7 @@ def get_obsidian_tags(vault_path):
         except:
             continue
 
-    print(f"Found {len(tag_counter)} unique hashtags in {file_count} files")
+    logger.info(f"Found {len(tag_counter)} unique hashtags in {file_count} files")
     return tag_counter
 
 
@@ -90,7 +98,7 @@ def save_tags(tag_counter, filename='obsidian_tags.json'):
     tag_dict = dict(tag_counter)
     with open(filename, 'w') as f:
         json.dump(tag_dict, f, indent=2)
-    print(f"Tags saved to {filename}")
+    logger.info(f"Tags saved to {filename}")
 
 
 def load_saved_tags(filename='obsidian_tags.json'):
@@ -98,14 +106,14 @@ def load_saved_tags(filename='obsidian_tags.json'):
     try:
         with open(filename, 'r') as f:
             tag_dict = json.load(f)
-        print(f"Loaded {len(tag_dict)} tags from {filename}")
+        logger.info(f"Loaded {len(tag_dict)} tags from {filename}")
         # Return just the tag names (keys) as a list for the main script
         return list(tag_dict.keys())
     except FileNotFoundError:
-        print(f"No saved tags found at {filename}")
+        logger.warning(f"No saved tags found at {filename}")
         return []
     except json.JSONDecodeError:
-        print(f"Error reading {filename}")
+        logger.error(f"Error reading {filename}")
         return []
 
 
@@ -118,20 +126,20 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         VAULT_PATH = sys.argv[1]
 
-    print(f"Scanning vault: {VAULT_PATH}")
+    logger.info(f"Scanning vault: {VAULT_PATH}")
     tags = get_obsidian_tags(VAULT_PATH)
 
     if tags:
-        print(f"\nMost common hashtags:")
+        logger.info("\nMost common hashtags:")
         for tag, count in tags.most_common(50):
-            print(f"{count:3d}x #{tag}")
+            logger.info(f"{count:3d}x #{tag}")
 
-        print(f"\nTags used only once (potential noise):")
+        logger.info("\nTags used only once (potential noise):")
         rare_tags = [tag for tag, count in tags.items() if count == 1]
         for tag in sorted(rare_tags)[:20]:  # Show first 20
-            print(f"  1x #{tag}")
+            logger.info(f"  1x #{tag}")
         if len(rare_tags) > 20:
-            print(f"  ... and {len(rare_tags) - 20} more")
+            logger.info(f"  ... and {len(rare_tags) - 20} more")
 
         # Save to both formats
         save_tags(tags, 'obsidian_tags.json')
@@ -141,9 +149,7 @@ if __name__ == "__main__":
         with open('obsidian_hashtags.txt', 'w') as f:
             for tag in sorted(frequent_tags):
                 f.write(f"#{tag}\n")
-        print(
-            f"\n{len(frequent_tags)} frequent hashtags saved to obsidian_hashtags.txt")
-        print(
-            f"Filtered out {len(rare_tags)} single-use tags as potential noise")
+        logger.info(f"\n{len(frequent_tags)} frequent hashtags saved to obsidian_hashtags.txt")
+        logger.info(f"Filtered out {len(rare_tags)} single-use tags as potential noise")
     else:
-        print("No hashtags found!")
+        logger.warning("No hashtags found!")

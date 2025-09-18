@@ -6,6 +6,7 @@ import openai
 import hashlib
 import unicodedata
 import re
+import logging
 from pathlib import Path
 from datetime import datetime
 
@@ -15,6 +16,13 @@ from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 def encode_image(image_path):
@@ -174,19 +182,19 @@ if len(sys.argv) > 1:
     group_name = sys.argv[1]
     # Process only the specified group folder
     folders_to_process = [group_name]
-    print(f"Processing GPT conversion for group: {group_name}")
+    logger.info(f"Processing GPT conversion for group: {group_name}")
 else:
     # Process all folders (original behavior)
     folders_to_process = [d for d in os.listdir(
         input_images_dir) if os.path.isdir(os.path.join(input_images_dir, d))]
-    print("Processing GPT conversion for all groups")
+    logger.info("Processing GPT conversion for all groups")
 
 for folder in folders_to_process:
     folder_path = os.path.join(input_images_dir, folder)
 
     # Skip if folder doesn't exist (for single group mode)
     if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
-        print(f"Group folder {folder} not found, skipping")
+        logger.warning(f"Group folder {folder} not found, skipping")
         continue
 
     folder_texts = []
@@ -232,7 +240,7 @@ for folder in folders_to_process:
 
         # Check if UUID already exists in cache
         if uuid in responses:
-            print(f"UUID {uuid} found in cache. Serving from cache.")
+            logger.info(f"UUID {uuid} found in cache. Serving from cache.")
             response_dict = responses[uuid]
         else:
             if mock_mode:
@@ -251,7 +259,7 @@ for folder in folders_to_process:
 
                 response_dict = response.model_dump()
 
-            print(response_dict)
+            logger.info(f"GPT Response: {response_dict}")
 
             metadata_dict = response_dict['choices'][0]['message']['content']
 
@@ -263,19 +271,16 @@ for folder in folders_to_process:
                 is_valid_json = True
             except json.JSONDecodeError as e:
                 is_valid_json = False
-                print(
-                    f"WARNING!!! The response content is not valid JSON. {e}")
-                print(f"Raw content: {repr(metadata_dict)}")
-                print(f"Cleaned content: {repr(content)}")
+                logger.error(f"WARNING!!! The response content is not valid JSON. {e}")
+                logger.error(f"Raw content: {repr(metadata_dict)}")
+                logger.error(f"Cleaned content: {repr(content)}")
                 # Print the specific error location if available
                 if hasattr(e, 'lineno') and hasattr(e, 'colno'):
                     lines = content.split('\n')
                     if e.lineno <= len(lines):
                         problem_line = lines[e.lineno - 1]
-                        print(
-                            f"Error at line {e.lineno}, column {e.colno}: {problem_line}")
-                        print(
-                            f"Error character: {repr(problem_line[e.colno-1:e.colno+10] if e.colno <= len(problem_line) else 'EOF')}")
+                        logger.error(f"Error at line {e.lineno}, column {e.colno}: {problem_line}")
+                        logger.error(f"Error character: {repr(problem_line[e.colno-1:e.colno+10] if e.colno <= len(problem_line) else 'EOF')}")
                 metadata_dict = {}
 
             responses[uuid] = response_dict
@@ -295,5 +300,4 @@ for folder in folders_to_process:
             with open(responses_file, "w") as json_file:
                 json.dump(responses, json_file, indent=4)
 
-            print(
-                f"Response for folder {folder} saved and appended to JSON file.")
+            logger.info(f"Response for folder {folder} saved and appended to JSON file.")
