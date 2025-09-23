@@ -186,7 +186,7 @@ def combine_responses(individual_responses):
     # Create combined metadata
     combined_metadata = {
         'transcription': combined_transcription,
-        'date': earliest_date,
+        'date': [date_str for _, date_str in parsed_dates],
         'tags': unique_tags
     }
 
@@ -224,7 +224,7 @@ Use the image and text to assist in transcribing the words accurately. If you se
 Output text in markdown format and wrap it in JSON, using the included template below for structure. Your transcription should replace the <transcription_here> in the template.
 Do not include ```markdown code tags or ```json code tags, otherwise structure using normal JSON containing normal markdown syntax. (DO NOT WRAP in markdown or json code blocks).
 I want you to devise a simple title, based on the content of the note, and insert it into the <title_here> field.
-I want you to add an additional annotation that includes the date of the text (if present), in the <date_here> field.
+I want you to add an additional annotation that includes the date of the text (if present), in the <date_here> field. Never guess years on a date, you must have a full date, including year, to include it here.
 '''
 
 multi_prompt = '''Here are your directions:
@@ -235,6 +235,7 @@ Create a title for the note that helps summarize the content of the included not
 Output the text in markdown format and wrap it in JSON, using the included template below for structure. Your transcription should replace the <transcription_here> in the template.
 I want you to devise a simple title, based on the content of all the notes, and insert it into the <title_here> field.
 I want you to add an additional annotation that includes a date range from the notes (if present), or a single date if there is only one. This should go in the <date_here> field.
+Never guess years on a date, you must have a full date, including year, to include it here. Random references to dates should not be included, a date value should be listed by itself in the manner of "dating" a document, to be included.
 Do not include ```markdown code tags or ```json code tags, otherwise structure using normal JSON containing normal markdown syntax. (DO NOT WRAP in markdown or json code blocks).
 '''
 
@@ -408,7 +409,7 @@ for folder in folders_to_process:
                         all_individual_responses, indent=2)}
                 ]
 
-                # todo: make secondary API call that uses the individual calls as an input, the purpose is to add tags and metadata at the level of the combined pages
+                logger.info('Outgoing agg API call:', combined_metadata)
 
                 response = client.chat.completions.create(
                     model=model,

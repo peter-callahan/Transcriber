@@ -109,7 +109,7 @@ for uuid, response_data in responses.items():
     markdown_content = f"# {title}\n\n"
 
     if multi_note_upload:
-        markdown_content += f"## Summary: {summary}"
+        markdown_content += f"## Summary: {summary}\n\n"
 
     # document date, different from individual response dates, which are listed below for multi-note uploads
     markdown_content += f"**Date:** {date}\n\n"
