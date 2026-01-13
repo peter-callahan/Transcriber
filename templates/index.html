@@ -456,6 +456,8 @@
             loadConfig();
             setupUploadHandlers();
             loadViewPreferences();
+            loadExistingTempFiles();
+            startTempFolderPolling();
         });
 
         function setupUploadHandlers() {
@@ -931,6 +933,57 @@
                 console.error('Load config error:', error);
             });
         }
+
+        function loadExistingTempFiles() {
+            fetch('/api/temp')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.files && data.files.length > 0) {
+                        // Add files to uploadedImages, avoiding duplicates
+                        data.files.forEach(file => {
+                            if (!uploadedImages.some(img => img.name === file.name)) {
+                                uploadedImages.push({
+                                    ...file,
+                                    selected: false,
+                                    groupId: null
+                                });
+                            }
+                        });
+                        displayImages();
+                    }
+                })
+                .catch(error => {
+                    console.error('Failed to load existing temp files:', error);
+                });
+        }
+
+        function startTempFolderPolling() {
+            setInterval(() => {
+                fetch('/api/temp')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.files && data.files.length > 0) {
+                            let newFilesAdded = false;
+                            data.files.forEach(file => {
+                                if (!uploadedImages.some(img => img.name === file.name)) {
+                                    uploadedImages.push({
+                                        ...file,
+                                        selected: false,
+                                        groupId: null
+                                    });
+                                    newFilesAdded = true;
+                                }
+                            });
+                            if (newFilesAdded) {
+                                displayImages();
+                            }
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Polling error:', error);
+                    });
+            }, 2000); // Check every 2 seconds
+}
 
         function updateConfig() {
             const config = {

@@ -93,6 +93,11 @@ def get_groups():
 def upload_files():
     """Upload files to temp folder with enhanced error handling"""
     try:
+        logger.info(f"Upload request received")
+        logger.info(f"Content-Type: {request.content_type}")
+        logger.info(f"Files: {request.files}")
+        logger.info(f"Form: {request.form}")
+
         if 'files' not in request.files:
             return jsonify({'error': 'No files provided'}), 400
 
@@ -210,10 +215,70 @@ def upload_files():
         }), 500
 
 
+@app.route('/api/upload_raw', methods=['POST'])
+def upload_raw_file():
+    """Handle raw file upload from iOS Shortcuts"""
+    try:
+        if not request.data:
+            return jsonify({'error': 'No data received'}), 400
+
+        # Generate filename with timestamp
+        import time
+        timestamp = int(time.time() * 1000)
+        filename = f"shortcut_{timestamp}.jpg"
+        file_path = os.path.join(TEMP_FOLDER, filename)
+
+        # Write raw bytes to file
+        with open(file_path, 'wb') as f:
+            f.write(request.data)
+
+        # Check file size
+        file_size = os.path.getsize(file_path)
+        if file_size == 0:
+            os.remove(file_path)
+            return jsonify({'error': 'Empty file received'}), 400
+
+        logger.info(f"Raw upload received: {filename}, size: {file_size}")
+
+        return jsonify({
+            'files': [{
+                'name': filename,
+                'original_name': filename,
+                'path': f'/api/temp/{filename}',
+                'size': file_size
+            }],
+            'uploaded_count': 1,
+            'error_count': 0
+        })
+
+    except Exception as e:
+        logger.error(f"Raw upload error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/temp/<filename>')
 def get_temp_image(filename):
     """Serve temp images"""
     return send_file(os.path.join(TEMP_FOLDER, filename))
+
+
+@app.route('/api/temp', methods=['GET'])
+def list_temp_files():
+    """List all files currently in temp folder"""
+    try:
+        files = []
+        for filename in os.listdir(TEMP_FOLDER):
+            file_path = os.path.join(TEMP_FOLDER, filename)
+            if os.path.isfile(file_path):
+                files.append({
+                    'name': filename,
+                    'original_name': filename,
+                    'path': f'/api/temp/{filename}',
+                    'size': os.path.getsize(file_path)
+                })
+        return jsonify({'files': files})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/processed/<group_name>/<filename>')
@@ -434,4 +499,5 @@ def get_progress():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='127.0.0.1', port=5001)
+    # app.run(debug=True, host='127.0.0.1', port=5001)
+    app.run(debug=True, host='0.0.0.0', port=5001)

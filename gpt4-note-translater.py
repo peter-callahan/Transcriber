@@ -330,124 +330,123 @@ for folder in folders_to_process:
 
     if image_text_pairs:
         uuid = generate_uuid(image_list, model)
-        response_dict = {}
 
         # Check if UUID already exists in cache
         if uuid in responses:
             logger.info(f"UUID {uuid} found in cache. Serving from cache.")
-            response_dict = responses[uuid]
+            continue
 
-        else:
-            # Process each image/text pair individually
-            individual_responses = []
+        # Process each image/text pair individually
+        individual_responses = []
 
-            for i, pair in enumerate(image_text_pairs):
-                logger.info(
-                    f"Processing image {i+1}/{len(image_text_pairs)}: {pair['filename']}")
+        for i, pair in enumerate(image_text_pairs):
+            logger.info(
+                f"Processing image {i+1}/{len(image_text_pairs)}: {pair['filename']}")
 
-                # Create content for this single image
-                single_content = [
-                    {"type": "text", "text": single_response_prompt},
-                    {"type": "text", "text": pair['text']},
-                    pair['image']
-                ]
+            # Create content for this single image
+            single_content = [
+                {"type": "text", "text": single_response_prompt},
+                {"type": "text", "text": pair['text']},
+                pair['image']
+            ]
 
-                try:
-                    if mock_mode:
-                        single_response = get_mock_response()
-                    else:
-                        response = client.chat.completions.create(
-                            model=model,
-                            messages=[
-                                {
-                                    "role": "user",
-                                    "content": single_content
-                                }
-                            ],
-                            max_tokens=10000
-                        )
-                        single_response = response.model_dump()
+            try:
+                if mock_mode:
+                    single_response = get_mock_response()
+                else:
+                    response = client.chat.completions.create(
+                        model=model,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": single_content
+                            }
+                        ],
+                        max_tokens=10000
+                    )
+                    single_response = response.model_dump()
 
-                    # Parse the individual response
-                    content = single_response['choices'][0]['message']['content']
-                    cleaned_content = clean_json_text(content)
-
-                    try:
-                        cleaned_content = json.loads(cleaned_content)
-                        is_valid_json = True
-                    except json.JSONDecodeError as e:
-                        logger.error(
-                            f"Invalid JSON in response for {pair['filename']}: {e}")
-
-                        # todo: Do something to handle this, try again, or maybe skip??
-
-                        is_valid_json = False
-                        # metadata_dict = {}
-
-                    individual_responses.append({
-                        'response': single_response,
-                        'transcription': cleaned_content,
-                        'is_valid_json': is_valid_json,
-                        'filename': pair['filename']
-                    })
-
-                except Exception as e:
-                    logger.error(f"Error processing {pair['filename']}: {e}")
-                    continue
-
-            # Add summary details for multiple responses
-            response_dict[uuid] = {}
-
-            if len(individual_responses) > 1:
-
-                all_individual_responses = combine_responses(
-                    individual_responses)
-
-                combined_metadata = [
-                    {"type": "text", "text": multi_response_prompt},
-                    {"type": "text", "text": json.dumps(
-                        all_individual_responses, indent=2)}
-                ]
-
-                logger.info('Outgoing agg API call:', combined_metadata)
-
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": combined_metadata
-                        }
-                    ],
-                    max_tokens=16384
-                )
-                multi_response = response.model_dump()
-
-                logger.info(
-                    f"Combined GPT Response: {len(individual_responses)} individual responses processed")
-
-                response_dict[uuid]["image_paths"] = [os.path.join(
-                    folder_path, img) for img in image_list]
-
-                response_content = multi_response['choices'][0]['message']['content']
-                cleaned_content = clean_json_text(response_content)
-
-                response_dict[uuid]['summary'] = {}
+                # Parse the individual response
+                content = single_response['choices'][0]['message']['content']
+                cleaned_content = clean_json_text(content)
 
                 try:
-                    parsed_content = json.loads(cleaned_content)
-                    response_dict[uuid]['summary']['is_valid_json'] = True
-                    response_dict[uuid]['summary']['contents'] = parsed_content
-
+                    cleaned_content = json.loads(cleaned_content)
+                    is_valid_json = True
                 except json.JSONDecodeError as e:
-                    logger.error(f"Invalid JSON in final response: {e}")
-                    response_dict[uuid]['summary']['is_valid_json'] = False
-                    response_dict[uuid]['summary']['contents'] = response_content
+                    logger.error(
+                        f"Invalid JSON in response for {pair['filename']}: {e}")
 
-            response_dict[uuid]['individual_responses'] = individual_responses
+                    # todo: Do something to handle this, try again, or maybe skip??
 
-            with open(responses_file, "w") as json_file:
-                json.dump(response_dict, json_file, indent=4)
+                    is_valid_json = False
+                    # metadata_dict = {}
+
+                individual_responses.append({
+                    'response': single_response,
+                    'transcription': cleaned_content,
+                    'is_valid_json': is_valid_json,
+                    'filename': pair['filename']
+                })
+
+            except Exception as e:
+                logger.error(f"Error processing {pair['filename']}: {e}")
+                continue
+
+        # Prepare data for this UUID
+        responses[uuid] = {}
+        responses[uuid]["image_paths"] = [os.path.join(
+            folder_path, img) for img in image_list]
+        responses[uuid]['individual_responses'] = individual_responses
+
+        # Add summary details for multiple responses
+        if len(individual_responses) > 1:
+
+            all_individual_responses = combine_responses(
+                individual_responses)
+
+            combined_metadata = [
+                {"type": "text", "text": multi_response_prompt},
+                {"type": "text", "text": json.dumps(
+                    all_individual_responses, indent=2)}
+            ]
+
+            logger.info('Outgoing agg API call: %s', combined_metadata)
+
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": combined_metadata
+                    }
+                ],
+                max_tokens=16384
+            )
+            multi_response = response.model_dump()
 
             logger.info(
-                f"Response for folder {folder} saved and appended to JSON file.")
+                f"Combined GPT Response: {len(individual_responses)} individual responses processed")
+
+            response_content = multi_response['choices'][0]['message']['content']
+            cleaned_content = clean_json_text(response_content)
+
+            responses[uuid]['summary'] = {}
+
+            try:
+                parsed_content = json.loads(cleaned_content)
+                responses[uuid]['summary']['is_valid_json'] = True
+                responses[uuid]['summary']['contents'] = parsed_content
+
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON in final response: {e}")
+                responses[uuid]['summary']['is_valid_json'] = False
+                responses[uuid]['summary']['contents'] = response_content
+
+        # Save all responses (not overwrite)
+        with open(responses_file, "w") as json_file:
+            json.dump(responses, json_file, indent=4)
+
+        logger.info(
+            f"Response for folder {folder} saved and appended to JSON file.")
+        logger.info(f"Successfully completed group {folder}")
