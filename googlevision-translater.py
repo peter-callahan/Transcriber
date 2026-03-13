@@ -87,9 +87,17 @@ if __name__ == "__main__":
         folder_path = os.path.join(input_images_dir, group_name)
         if os.path.exists(folder_path) and os.path.isdir(folder_path):
             logger.info(f"Processing OCR for group: {group_name}")
-            for image_file in os.listdir(folder_path):
+            all_files = os.listdir(folder_path)
+            logger.info(f"Files in {folder_path}: {all_files}")
+
+            # Filter for image files
+            image_files = [f for f in all_files if f.lower().endswith((".jpg", ".jpeg", ".png", ".heic"))]
+            logger.info(f"Found {len(image_files)} image files to process")
+
+            for image_file in all_files:
                 image_path = os.path.join(folder_path, image_file)
                 if os.path.isfile(image_path) and image_file.lower().endswith((".jpg", ".jpeg", ".png", ".heic")):
+                    logger.info(f"Processing OCR for: {image_file}")
                     # Generate the output text file name
                     base_name, _ = os.path.splitext(image_file)
                     output_path = os.path.join(folder_path, f"{base_name}.txt")

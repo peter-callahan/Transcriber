@@ -304,10 +304,19 @@ for folder in folders_to_process:
     image_text_pairs = []
     image_list = []
 
-    for image_file in os.listdir(folder_path):
+    all_files = os.listdir(folder_path)
+    logger.info(f"Files in {folder_path}: {all_files}")
+
+    # Filter for image and text files
+    image_files = [f for f in all_files if f.lower().endswith((".jpg", ".jpeg", ".png", ".heic"))]
+    text_files = [f for f in all_files if f.lower().endswith(".txt")]
+    logger.info(f"Found {len(image_files)} images and {len(text_files)} text files")
+
+    for image_file in all_files:
         image_path = os.path.join(folder_path, image_file)
 
         if image_file.lower().endswith((".jpg", ".jpeg", ".png", ".heic")):
+            logger.info(f"Processing GPT conversion for: {image_file}")
             image_list.append(image_file)
 
             # Encode image

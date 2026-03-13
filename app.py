@@ -93,11 +93,6 @@ def get_groups():
 def upload_files():
     """Upload files to temp folder with enhanced error handling"""
     try:
-        logger.info(f"Upload request received")
-        logger.info(f"Content-Type: {request.content_type}")
-        logger.info(f"Files: {request.files}")
-        logger.info(f"Form: {request.form}")
-
         if 'files' not in request.files:
             return jsonify({'error': 'No files provided'}), 400
 
@@ -225,7 +220,37 @@ def upload_raw_file():
         # Generate filename with timestamp
         import time
         timestamp = int(time.time() * 1000)
-        filename = f"shortcut_{timestamp}.jpg"
+
+        print(request.headers)
+
+        original_filename = request.headers.get('X-Filename', '')
+        extension = request.headers.get('X-Extension', '')
+        content_type = request.headers.get('Content-Type', '')
+
+        # Determine extension from content type if not provided
+        if not extension and content_type:
+            if 'png' in content_type.lower():
+                extension = '.png'
+            elif 'jpeg' in content_type.lower() or 'jpg' in content_type.lower():
+                extension = '.jpg'
+            elif 'heic' in content_type.lower():
+                extension = '.heic'
+
+        if original_filename:
+            # If extension is provided separately, append it
+            if extension and not extension.startswith('.'):
+                extension = f'.{extension}'
+
+            # Check if filename already has an extension
+            if extension and '.' not in os.path.basename(original_filename):
+                filename = f"{original_filename}{extension}"
+            else:
+                filename = original_filename
+        else:
+            # Use detected extension or default to .jpg
+            ext = extension if extension else '.jpg'
+            filename = f"shortcut_{timestamp}{ext}"
+
         file_path = os.path.join(TEMP_FOLDER, filename)
 
         # Write raw bytes to file
@@ -238,7 +263,23 @@ def upload_raw_file():
             os.remove(file_path)
             return jsonify({'error': 'Empty file received'}), 400
 
-        logger.info(f"Raw upload received: {filename}, size: {file_size}")
+        # Verify the file is a valid image and detect actual format
+        try:
+            from PIL import Image
+            with Image.open(file_path) as img:
+                actual_format = img.format
+                detected_ext = f".{actual_format.lower()}" if actual_format else None
+
+                # Warn if extension doesn't match actual format
+                if detected_ext and not filename.lower().endswith(detected_ext):
+                    logger.warning(f"File extension mismatch: {filename} is actually {actual_format}")
+                    logger.info(f"Content-Type: {content_type}, Detected: {actual_format}, Extension: {extension}")
+        except Exception as e:
+            logger.error(f"Failed to verify image format for {filename}: {e}")
+            os.remove(file_path)
+            return jsonify({'error': f'Invalid image file: {str(e)}'}), 400
+
+        logger.info(f"Raw upload received: {filename}, size: {file_size}, format: {actual_format if 'actual_format' in locals() else 'unknown'}")
 
         return jsonify({
             'files': [{
@@ -276,6 +317,9 @@ def list_temp_files():
                     'path': f'/api/temp/{filename}',
                     'size': os.path.getsize(file_path)
                 })
+
+        files.sort(key=lambda x: x['name'])
+
         return jsonify({'files': files})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -320,7 +364,12 @@ def process_images():
     """Run the complete processing pipeline with groups"""
     try:
         data = request.json
+        logger.info(f"Received processing request with data: {data}")
         groups = data.get('groups', [])
+        logger.info(f"Extracted {len(groups)} groups from request")
+
+        for i, group in enumerate(groups):
+            logger.info(f"Group {i}: {group}")
 
         if not groups:
             return jsonify({'error': 'No image groups provided'}), 400
@@ -336,12 +385,18 @@ def process_images():
             group_folder = os.path.join(INPUT_FOLDER, group_name)
             os.makedirs(group_folder, exist_ok=True)
 
-            for image_file in group.get('images', []):
+            images_in_group = group.get('images', [])
+            logger.info(f"Group {group_name} has {len(images_in_group)} images: {images_in_group}")
+
+            for image_file in images_in_group:
                 temp_path = os.path.join(TEMP_FOLDER, image_file)
                 new_path = os.path.join(group_folder, image_file)
+                logger.info(f"Attempting to copy {temp_path} to {new_path}")
                 if os.path.exists(temp_path):
-                    # Copy instead of move to keep temp files
                     shutil.copy2(temp_path, new_path)
+                    logger.info(f"Successfully copied {image_file}")
+                else:
+                    logger.error(f"File not found in temp: {temp_path}")
 
         # Step 3: Process each group sequentially
         global processing_progress
@@ -374,7 +429,9 @@ def process_images():
                 # Resize images for this group
                 processing_progress['current_step'] = f'Resizing images for {group_name}'
                 result = subprocess.run(['python', 'process_images.py', group_name],
-                                        cwd=os.getcwd())
+                                        cwd=os.getcwd(), capture_output=True, text=True)
+                logger.info(f'process_images.py STDOUT: {result.stdout}')
+                logger.info(f'process_images.py STDERR: {result.stderr}')
                 if result.returncode != 0:
                     logger.warning(f'Image processing failed for {group_name}')
                     failed_groups.append(f'{group_name} (image processing)')
@@ -386,7 +443,9 @@ def process_images():
                 env['GOOGLE_APPLICATION_CREDENTIALS'] = os.getenv(
                     'GOOGLE_APPLICATION_CREDENTIALS')
                 result = subprocess.run(['python', 'googlevision-translater.py', group_name],
-                                        cwd=os.getcwd(), env=env)
+                                        cwd=os.getcwd(), env=env, capture_output=True, text=True)
+                logger.info(f'googlevision-translater.py STDOUT: {result.stdout}')
+                logger.info(f'googlevision-translater.py STDERR: {result.stderr}')
                 if result.returncode != 0:
                     logger.warning(f'OCR processing failed for {group_name}')
                     failed_groups.append(f'{group_name} (OCR)')
@@ -398,7 +457,9 @@ def process_images():
                 openai_key = os.getenv('OPENAI_API_KEY')
                 env['OPENAI_API_KEY'] = openai_key
                 result = subprocess.run(['python', 'gpt4-note-translater.py', group_name],
-                                        cwd=os.getcwd(), env=env)
+                                        cwd=os.getcwd(), env=env, capture_output=True, text=True)
+                logger.info(f'gpt4-note-translater.py STDOUT: {result.stdout}')
+                logger.info(f'gpt4-note-translater.py STDERR: {result.stderr}')
                 if result.returncode != 0:
                     logger.warning(f'Text conversion failed for {group_name}')
                     failed_groups.append(f'{group_name} (text conversion)')

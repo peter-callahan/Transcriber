@@ -52,9 +52,16 @@ output_dir = os.path.expanduser(output_dir)
 # Create the output directory
 os.makedirs(output_dir, exist_ok=True)
 
-# Load the JSON data
-with open("responses.json", "r") as json_file:
-    responses = json.load(json_file)
+# Check if responses.json exists, create if it doesn't
+if not os.path.exists("responses.json"):
+    logger.info("No responses.json file found. Creating empty file.")
+    with open("responses.json", "w") as json_file:
+        json.dump({}, json_file)
+    responses = {}
+else:
+    # Load the JSON data
+    with open("responses.json", "r") as json_file:
+        responses = json.load(json_file)
 
 # Iterate through each response
 for uuid, response_data in responses.items():
