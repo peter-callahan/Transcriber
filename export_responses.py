@@ -89,7 +89,7 @@ for uuid, response_data in responses.items():
         # Create safe folder name with proper null handling
         safe_title = sanitize_filename(title) if title else 'Untitled'
         safe_date = sanitize_filename(date) if date else 'Unknown_Date'
-        folder_name = f"{safe_title}_{safe_date}"
+        folder_name = f"{safe_date} - {safe_title}"
 
     elif response_data.get('individual_responses')[0]['is_valid_json']:
         logger.info(f"Single note detected: {uuid}")
@@ -104,7 +104,7 @@ for uuid, response_data in responses.items():
         # Create safe folder name with proper null handling
         safe_title = sanitize_filename(title) if title else 'Untitled'
         safe_date = sanitize_filename(date) if date else 'Unknown_Date'
-        folder_name = f"{safe_title}_{safe_date}"
+        folder_name = f"{safe_date} - {safe_title}"
 
     else:
         logger.warning(f"Unparsable note detected: {uuid}")
@@ -116,7 +116,7 @@ for uuid, response_data in responses.items():
     markdown_content = f"# {title}\n\n"
 
     if multi_note_upload:
-        markdown_content += f"## Summary: {summary}\n\n"
+        markdown_content += f"## Summary\n\n{summary}\n\n"
 
     # document date, different from individual response dates, which are listed below for multi-note uploads
     markdown_content += f"**Date:** {date}\n\n"
@@ -125,13 +125,18 @@ for uuid, response_data in responses.items():
         markdown_content += f"**Tags:** {' '.join([f'#{tag}' for tag in tags])}\n\n"
 
     for individual_response in individual_responses:
+        # Use pre-normalized data (created by gpt4-note-translater.py)
+        # This is the single source of truth for parsing logic
+        normalized = individual_response.get('normalized', {})
 
-        individual_response_data = individual_response.get('transcription', '')
-
+        # Add date for multi-note uploads
         if multi_note_upload:
-            markdown_content += f"{individual_response_data.get('date','')}\n\n"
+            date = normalized.get('date', '')
+            if date:
+                markdown_content += f"{date}\n\n"
 
-        markdown_content += f"{individual_response_data.get('transcription','')}\n\n"
+        # Add transcription content
+        markdown_content += f"{normalized.get('transcription', '')}\n\n"
 
     # Ensure unique folder name
     original_folder_name = folder_name

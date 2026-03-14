@@ -25,6 +25,39 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Date configuration - centralized date format control
+DATE_FORMAT = "%Y_%m_%d"  # Output format: YYYY_MM_DD
+DATE_FORMAT_DISPLAY = "YYYY_MM_DD"  # Human-readable format for prompts
+
+
+def get_file_order(folder_path):
+    """
+    Read the intended file processing order from order.json.
+    Falls back to sorted filenames if order.json doesn't exist.
+
+    Args:
+        folder_path: Path to the group folder
+
+    Returns:
+        List of filenames in the order they should be processed
+    """
+    order_file = os.path.join(folder_path, 'order.json')
+
+    if os.path.exists(order_file):
+        try:
+            with open(order_file, 'r') as f:
+                order_data = json.load(f)
+                return order_data.get('files', [])
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(
+                f"Failed to read order.json: {e}, falling back to sorted order")
+
+    # Fallback: return sorted list of image files
+    all_files = os.listdir(folder_path)
+    image_files = [f for f in all_files if f.lower().endswith(
+        ('.jpg', '.jpeg', '.png', '.heic'))]
+    return sorted(image_files)
+
 
 def encode_image(image_path):
     with open(image_path, "rb") as f:
@@ -39,24 +72,54 @@ def add_suffix_to_path(file_path, suffix):
 
 
 def parse_date_string(date_str):
-    """Try multiple formats and coerce to DD-MMM-YYYY."""
-    date_formats = [
+    """Try multiple formats and coerce to configured DATE_FORMAT (YYYY_MM_DD).
+
+    Handles full dates and partial dates (month/year only).
+    Partial dates are coerced to the first day of the month (YYYY_MM_01).
+    """
+    # Full date formats (with day)
+    full_date_formats = [
+        "%Y_%m_%d",      # 2025_08_01 (our target format)
+        "%Y-%m-%d",      # 2025-08-01
         "%d-%b-%Y",      # 1-Aug-2025
         "%d/%m/%Y",      # 01/08/2025
-        "%Y-%m-%d",      # 2025-08-01
         "%m/%d/%Y",      # 08/01/2025
         "%d %b %Y",      # 1 Aug 2025
         "%b %d, %Y",     # Aug 1, 2025
         "%Y.%m.%d",      # 2025.08.01
         "%d.%m.%Y",      # 01.08.2025
-        # Add more as needed
     ]
-    for fmt in date_formats:
+
+    # Partial date formats (month/year only - will default to day 1)
+    partial_date_formats = [
+        "%b %Y",         # Aug 2025
+        "%B %Y",         # August 2025
+        "%b-%Y",         # Aug-2025
+        "%B-%Y",         # August-2025
+        "%m/%Y",         # 08/2025
+        "%m-%Y",         # 08-2025
+        "%Y-%m",         # 2025-08
+        "%Y/%m",         # 2025/08
+    ]
+
+    # Try full date formats first
+    for fmt in full_date_formats:
         try:
             dt = datetime.strptime(date_str.strip(), fmt)
-            return dt.strftime("%d-%b-%Y")
+            return dt.strftime(DATE_FORMAT)
         except Exception:
             continue
+
+    # Try partial date formats (month/year only)
+    for fmt in partial_date_formats:
+        try:
+            dt = datetime.strptime(date_str.strip(), fmt)
+            # Force day to 01 for partial dates
+            dt = dt.replace(day=1)
+            return dt.strftime(DATE_FORMAT)
+        except Exception:
+            continue
+
     return None  # Could not parse
 
 
@@ -145,48 +208,53 @@ def get_mock_response():
 def combine_responses(individual_responses):
     """
     Combine multiple individual GPT responses into a single unified response.
-    Each response should contain parsed metadata with title, transcription, date, tags.
+    Uses pre-normalized data from individual responses (single source of truth).
     """
     if not individual_responses:
         return {}
 
-    # Collect all valid parsed responses
+    # Collect all valid parsed responses using normalized data
     valid_responses = []
     all_tags = []
     dates = []
 
     for response_data in individual_responses:
-        valid_responses.append(response_data['transcription']['transcription'])
-        all_tags.append(response_data['transcription'].get('tags', []))
-        dates.append(response_data['transcription'].get('date', None))
+        # Use pre-normalized data (created when response was saved)
+        normalized = response_data.get('normalized', {})
+
+        transcription_text = normalized.get('transcription', '')
+        if transcription_text:
+            valid_responses.append(transcription_text)
+
+        all_tags.append(normalized.get('tags', []))
+
+        date_str = normalized.get('date', None)
+        if date_str:
+            dates.append(date_str)
 
     if not valid_responses:
         return {}
 
     # Combine transcriptions
-    combined_transcription = "\n\n".join(
-        [response for response in valid_responses])
+    combined_transcription = "\n\n".join(valid_responses)
 
+    # Combine tags
     flat_tags = list(chain.from_iterable(all_tags))
     unique_tags = list(set(flat_tags))
 
+    # Process dates - normalize all to DATE_FORMAT and collect them
+    parsed_dates = []
     if dates:
-        parsed_dates = []
         for date_str in dates:
-            coerced_date = parse_date_string(date_str) if date_str else None
-            if coerced_date:
-                dt = datetime.strptime(coerced_date, "%d-%b-%Y")
-                parsed_dates.append((dt, coerced_date))
-        if parsed_dates:
-            parsed_dates.sort(key=lambda x: x[0])
-            earliest_date = parsed_dates[0][1]
-        else:
-            earliest_date = dates[0]  # Fallback to first date
+            if date_str:
+                normalized_date = parse_date_string(date_str)
+                if normalized_date:
+                    parsed_dates.append(normalized_date)
 
     # Create combined metadata
     combined_metadata = {
         'transcription': combined_transcription,
-        'date': [date_str for _, date_str in parsed_dates],
+        'date': parsed_dates if parsed_dates else [],
         'tags': unique_tags
     }
 
@@ -257,8 +325,8 @@ expected_format_multiprompt = '''
 }
 '''
 
-date_format_rules = '''
-All dates should be in the format DD-MMM-YYYY, such as 1-Aug-2025.  Do not include / in dates or any characters that would disrupt their use as a filename.
+date_format_rules = f'''
+All dates should be in the format {DATE_FORMAT_DISPLAY}, such as 2025_08_01. Do not include / in dates or any characters that would disrupt their use as a filename.
 '''
 
 tag_guidance = ""
@@ -304,15 +372,12 @@ for folder in folders_to_process:
     image_text_pairs = []
     image_list = []
 
-    all_files = os.listdir(folder_path)
-    logger.info(f"Files in {folder_path}: {all_files}")
+    # Get files in the correct order from order.json
+    file_order = get_file_order(folder_path)
+    logger.info(
+        f"Processing GPT for group {folder}, {len(file_order)} files in order: {file_order}")
 
-    # Filter for image and text files
-    image_files = [f for f in all_files if f.lower().endswith((".jpg", ".jpeg", ".png", ".heic"))]
-    text_files = [f for f in all_files if f.lower().endswith(".txt")]
-    logger.info(f"Found {len(image_files)} images and {len(text_files)} text files")
-
-    for image_file in all_files:
+    for image_file in file_order:
         image_path = os.path.join(folder_path, image_file)
 
         if image_file.lower().endswith((".jpg", ".jpeg", ".png", ".heic")):
@@ -391,11 +456,27 @@ for folder in folders_to_process:
                     is_valid_json = False
                     # metadata_dict = {}
 
+                # Create normalized data for export (single source of truth)
+                if is_valid_json and isinstance(cleaned_content, dict):
+                    normalized = {
+                        'date': cleaned_content.get('date', ''),
+                        'transcription': cleaned_content.get('transcription', ''),
+                        'tags': cleaned_content.get('tags', [])
+                    }
+                else:
+                    # Invalid JSON - use raw text
+                    normalized = {
+                        'date': '',
+                        'transcription': cleaned_content if isinstance(cleaned_content, str) else str(cleaned_content),
+                        'tags': []
+                    }
+
                 individual_responses.append({
                     'response': single_response,
                     'transcription': cleaned_content,
                     'is_valid_json': is_valid_json,
-                    'filename': pair['filename']
+                    'filename': pair['filename'],
+                    'normalized': normalized  # Pre-processed data for export
                 })
 
             except Exception as e:
@@ -406,6 +487,8 @@ for folder in folders_to_process:
         responses[uuid] = {}
         responses[uuid]["image_paths"] = [os.path.join(
             folder_path, img) for img in image_list]
+        responses[uuid]["file_order"] = file_order
+        responses[uuid]["group_name"] = folder
         responses[uuid]['individual_responses'] = individual_responses
 
         # Add summary details for multiple responses
@@ -427,7 +510,7 @@ for folder in folders_to_process:
                 messages=[
                     {
                         "role": "user",
-                        "content": combined_metadata
+                        "content": combined_metadata  # type: ignore
                     }
                 ],
                 max_tokens=16384

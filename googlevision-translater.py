@@ -15,6 +15,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def get_file_order(folder_path):
+    """
+    Read the intended file processing order from order.json.
+    Falls back to sorted filenames if order.json doesn't exist.
+
+    Args:
+        folder_path: Path to the group folder
+
+    Returns:
+        List of filenames in the order they should be processed
+    """
+    order_file = os.path.join(folder_path, 'order.json')
+
+    if os.path.exists(order_file):
+        try:
+            with open(order_file, 'r') as f:
+                order_data = json.load(f)
+                return order_data.get('files', [])
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Failed to read order.json: {e}, falling back to sorted order")
+
+    # Fallback: return sorted list of image files
+    all_files = os.listdir(folder_path)
+    image_files = [f for f in all_files if f.lower().endswith(('.jpg', '.jpeg', '.png', '.heic'))]
+    return sorted(image_files)
+
+
 # Ensure Google credentials are set in environment
 if os.getenv('GOOGLE_APPLICATION_CREDENTIALS'):
     os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
@@ -87,14 +115,10 @@ if __name__ == "__main__":
         folder_path = os.path.join(input_images_dir, group_name)
         if os.path.exists(folder_path) and os.path.isdir(folder_path):
             logger.info(f"Processing OCR for group: {group_name}")
-            all_files = os.listdir(folder_path)
-            logger.info(f"Files in {folder_path}: {all_files}")
+            file_order = get_file_order(folder_path)
+            logger.info(f"Processing {len(file_order)} files in order: {file_order}")
 
-            # Filter for image files
-            image_files = [f for f in all_files if f.lower().endswith((".jpg", ".jpeg", ".png", ".heic"))]
-            logger.info(f"Found {len(image_files)} image files to process")
-
-            for image_file in all_files:
+            for image_file in file_order:
                 image_path = os.path.join(folder_path, image_file)
                 if os.path.isfile(image_path) and image_file.lower().endswith((".jpg", ".jpeg", ".png", ".heic")):
                     logger.info(f"Processing OCR for: {image_file}")

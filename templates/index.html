@@ -328,6 +328,7 @@
 
                 <!-- Group Creation Controls -->
                 <div style="margin-bottom: 15px;">
+                    <button class="btn btn-success" style="width: 100%; margin-bottom: 10px;" onclick="createGroupFromSelected()">Create Group from Selected</button>
                     <button class="btn btn-secondary" style="width: 100%; margin-bottom: 10px;" onclick="createSingleGroup()">Put All Images in One Group</button>
                     <button class="btn btn-secondary" style="width: 100%;" onclick="showBatchGroupCreation()">Create Multiple Groups</button>
                 </div>
@@ -756,6 +757,37 @@
 
         function getSelectedImages() {
             return uploadedImages.filter(img => img.selected);
+        }
+
+        function createGroupFromSelected() {
+            const selectedImages = getSelectedImages();
+
+            if (selectedImages.length === 0) {
+                showModal('No Selection', 'Please select at least one image to create a group', 'OK', false);
+                return;
+            }
+
+            const groupName = `Group ${imageGroups.length + 1}`;
+            const newGroup = {
+                id: imageGroups.length,
+                name: groupName,
+                images: selectedImages.map(img => img.name)
+            };
+
+            // Update selected images' group assignments
+            uploadedImages.forEach((img, index) => {
+                if (img.selected) {
+                    uploadedImages[index].groupId = newGroup.id;
+                    uploadedImages[index].selected = false;
+                }
+            });
+
+            imageGroups.push(newGroup);
+
+            displayImages();
+            displayGroups();
+            showSection('groupsSection');
+            showStatus(`Created group with ${selectedImages.length} image${selectedImages.length > 1 ? 's' : ''}`, 'success');
         }
 
         function createSingleGroup() {

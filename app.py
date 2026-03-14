@@ -398,6 +398,12 @@ def process_images():
                 else:
                     logger.error(f"File not found in temp: {temp_path}")
 
+            # Write order.json to preserve UI order
+            order_file = os.path.join(group_folder, 'order.json')
+            with open(order_file, 'w') as f:
+                json.dump({'files': images_in_group}, f, indent=2)
+            logger.info(f"Wrote file order to {order_file}: {images_in_group}")
+
         # Step 3: Process each group sequentially
         global processing_progress
         completed_groups = 0

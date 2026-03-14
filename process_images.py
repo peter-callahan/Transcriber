@@ -16,6 +16,33 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def get_file_order(folder_path):
+    """
+    Read the intended file processing order from order.json.
+    Falls back to sorted filenames if order.json doesn't exist.
+
+    Args:
+        folder_path: Path to the group folder
+
+    Returns:
+        List of filenames in the order they should be processed
+    """
+    order_file = os.path.join(folder_path, 'order.json')
+
+    if os.path.exists(order_file):
+        try:
+            with open(order_file, 'r') as f:
+                order_data = json.load(f)
+                return order_data.get('files', [])
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Failed to read order.json: {e}, falling back to sorted order")
+
+    # Fallback: return sorted list of image files
+    all_files = os.listdir(folder_path)
+    image_files = [f for f in all_files if f.lower().endswith(('.jpg', '.jpeg', '.png', '.heic'))]
+    return sorted(image_files)
+
+
 def resize_image(image_path, max_size=(2048, 2048)):
     try:
         # Log what we're attempting to process
@@ -101,9 +128,10 @@ if len(sys.argv) > 1:
     group_folder = os.path.join(input_folder, group_name)
     if os.path.exists(group_folder):
         logger.info(f"Processing images in group: {group_name}")
-        all_files = os.listdir(group_folder)
-        logger.info(f"Files in {group_folder}: {all_files}")
-        for image_file in all_files:
+        file_order = get_file_order(group_folder)
+        logger.info(f"Processing {len(file_order)} files in order: {file_order}")
+
+        for image_file in file_order:
             image_path = os.path.join(group_folder, image_file)
             if os.path.isfile(image_path) and image_file.lower().endswith(('.jpg', '.jpeg', '.png', '.heic')):
                 resize_image(image_path)
