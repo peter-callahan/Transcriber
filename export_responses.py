@@ -124,19 +124,26 @@ for uuid, response_data in responses.items():
     if tags:
         markdown_content += f"**Tags:** {' '.join([f'#{tag}' for tag in tags])}\n\n"
 
-    for individual_response in individual_responses:
-        # Use pre-normalized data (created by gpt4-note-translater.py)
-        # This is the single source of truth for parsing logic
-        normalized = individual_response.get('normalized', {})
+    # Use continuous transcription from summary if available
+    if (response_data.get('summary', {}).get('contents', {}).get('continuous_transcription')):
+        markdown_content += f"{response_data['summary']['contents']['continuous_transcription']}\n\n"
+        logger.info(f"Using continuous transcription from summary for {uuid}")
+    else:
+        # Fall back to individual page transcriptions
+        for individual_response in individual_responses:
+            # Use pre-normalized data (created by gpt4-note-translater.py)
+            # This is the single source of truth for parsing logic
+            normalized = individual_response.get('normalized', {})
 
-        # Add date for multi-note uploads
-        if multi_note_upload:
-            date = normalized.get('date', '')
-            if date:
-                markdown_content += f"{date}\n\n"
+            # Add date for multi-note uploads
+            if multi_note_upload:
+                date = normalized.get('date', '')
+                if date:
+                    markdown_content += f"{date}\n\n"
 
-        # Add transcription content
-        markdown_content += f"{normalized.get('transcription', '')}\n\n"
+            # Add transcription content
+            markdown_content += f"{normalized.get('transcription', '')}\n\n"
+        logger.info(f"Using individual page transcriptions for {uuid}")
 
     # Ensure unique folder name
     original_folder_name = folder_name

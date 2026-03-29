@@ -59,6 +59,72 @@ def get_file_order(folder_path):
     return sorted(image_files)
 
 
+def validate_group_output(folder, folder_path, file_order, individual_responses, summary=None):
+    """
+    Run structural checks on processed output and log warnings for any problems found.
+    Returns a list of warning strings (empty = all clear).
+    """
+    warnings = []
+
+    # --- Order check: files on disk vs order.json ---
+    all_files_on_disk = set(
+        f for f in os.listdir(folder_path)
+        if f.lower().endswith(('.jpg', '.jpeg', '.png', '.heic'))
+    )
+    order_set = set(file_order)
+    missing_from_order = all_files_on_disk - order_set
+    missing_from_disk = order_set - all_files_on_disk
+
+    order_source = "order.json" if os.path.exists(os.path.join(folder_path, 'order.json')) else "sorted fallback"
+    if order_source == "sorted fallback":
+        warnings.append(f"No order.json found — using alphabetical sort. Pages may be out of order.")
+    if missing_from_order:
+        warnings.append(f"Files on disk not in order list (will be skipped): {sorted(missing_from_order)}")
+    if missing_from_disk:
+        warnings.append(f"Files in order list not found on disk (will be missing): {sorted(missing_from_disk)}")
+
+    # --- JSON validity rate ---
+    total = len(individual_responses)
+    invalid = [r['filename'] for r in individual_responses if not r.get('is_valid_json')]
+    if invalid:
+        warnings.append(f"Invalid JSON from model for {len(invalid)}/{total} pages: {invalid}")
+
+    # --- Empty/suspiciously short transcriptions ---
+    MIN_TRANSCRIPTION_LENGTH = 20
+    for r in individual_responses:
+        text = r.get('normalized', {}).get('transcription', '')
+        if len(text.strip()) < MIN_TRANSCRIPTION_LENGTH:
+            warnings.append(f"Suspiciously short transcription for {r['filename']!r} ({len(text.strip())} chars) — may be a failed page")
+
+    # --- Tag count ---
+    for r in individual_responses:
+        tags = r.get('normalized', {}).get('tags', [])
+        if len(tags) > 3:
+            warnings.append(f"Too many tags ({len(tags)}) returned for {r['filename']!r} — expected 3 max: {tags}")
+
+    if summary:
+        contents = summary.get('contents', {})
+        if summary.get('is_valid_json') and isinstance(contents, dict):
+            summary_tags = contents.get('tags', [])
+            if len(summary_tags) > 3:
+                warnings.append(f"Summary response returned {len(summary_tags)} tags — expected 3 max: {summary_tags}")
+            continuous = contents.get('continuous_transcription', '')
+            if len(continuous.strip()) < MIN_TRANSCRIPTION_LENGTH:
+                warnings.append(f"Continuous transcription in summary is suspiciously short ({len(continuous.strip())} chars)")
+        elif not summary.get('is_valid_json'):
+            warnings.append("Summary (multi-page) response returned invalid JSON")
+
+    # Log all warnings
+    if warnings:
+        logger.warning(f"[VALIDATION] Group {folder!r} — {len(warnings)} issue(s) found:")
+        for w in warnings:
+            logger.warning(f"  - {w}")
+    else:
+        logger.info(f"[VALIDATION] Group {folder!r} — all checks passed")
+
+    return warnings
+
+
 def encode_image(image_path):
     with open(image_path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
@@ -292,19 +358,52 @@ Use the image and text to assist in transcribing the words accurately. If you se
 Output text in markdown format and wrap it in JSON, using the included template below for structure. Your transcription should replace the <transcription_here> in the template.
 Do not include ```markdown code tags or ```json code tags, otherwise structure using normal JSON containing normal markdown syntax. (DO NOT WRAP in markdown or json code blocks).
 I want you to devise a simple title, based on the content of the note, and insert it into the <title_here> field.
-I want you to add an additional annotation that includes the date of the text (if present), in the <date_here> field. Never guess years on a date, you must have a full date, including year, to include it here.
+
+CRITICAL - Whitespace Rules:
+- Only add line breaks or whitespace where they actually appear in the original handwritten text
+- DO NOT add extra paragraph breaks, blank lines, or spacing that isn't in the source material
+- Transcribe the text with the exact spacing and flow as written
+
+CRITICAL - Date Handling:
+- If a date appears in the document, it must appear in TWO places:
+  1. In the <date_here> metadata field (for use in filenames)
+  2. In the <transcription_here> text at its original location (preserve it in the transcription)
+- Never guess years on a date, include only what is explicitly stated in the document.
+- Dates should NOT be removed from the transcription text when extracting them to metadata.
 '''
 
-multi_prompt = '''Here are your directions:
-I am sending you a combination of previously transcribed notes that I want you to summarize in the following ways.
-Treat the incoming notes as pages in one continuous document where you should add your additional comments in the <summary_here> field.
-I want you to add an additional annotation that includes the date range of the texts present and provide between 1 and 3 tags that indicates the approximate subject matter.
-Create a title for the note that helps summarize the content of the included notes, make it more memorable to me if possible.
-Output the text in markdown format and wrap it in JSON, using the included template below for structure. Your transcription should replace the <transcription_here> in the template.
-I want you to devise a simple title, based on the content of all the notes, and insert it into the <title_here> field.
-I want you to add an additional annotation that includes a date range from the notes (if present), or a single date if there is only one. This should go in the <date_here> field.
-Never guess years on a date, you must have a full date, including year, to include it here. Random references to dates should not be included, a date value should be listed by itself in the manner of "dating" a document, to be included.
+multi_prompt = '''You are analyzing handwritten notes from sequential pages of the same document.
+
+CRITICAL INSTRUCTIONS:
+1. **Continuous Transcription**: Transcribe ALL pages as ONE flowing document
+   - Maintain natural continuity across page boundaries
+   - If a sentence continues from one page to the next, join them naturally
+   - DO NOT add page numbers or separators between pages
+   - Focus on creating readable, continuous prose while sticking to the original text precisely
+   - If a word is crossed out in the image, ignore it.
+
+   **CRITICAL - Whitespace Rules**:
+   - Only add line breaks or whitespace where they actually appear in the original handwritten text
+   - DO NOT add extra paragraph breaks, blank lines, or spacing that isn't in the source material
+   - Transcribe the text with the exact spacing and flow as written
+   - Ignore page boundaries - if text flows continuously, keep it continuous
+
+2. **Summary Metadata**: After transcribing, provide:
+   - Overall title for the document
+   - Date (or date range if multiple dates appear)
+   - Summary of the main themes/topics
+   - Relevant tags
+
+3. **CRITICAL - Date Handling**:
+   Dates must appear in TWO places:
+   - IN THE CONTINUOUS TRANSCRIPTION: Keep all dates at their original locations in the text exactly as they appear
+   - IN THE METADATA DATE FIELD: List the primary date (or all dates if multiple exist across pages)
+
+   A date value listed by itself in the manner of "dating" a document should be the primary data point for the metadata date field.
+   DO NOT remove dates from the continuous transcription when extracting them to metadata - they must remain in both places.
+
 Do not include ```markdown code tags or ```json code tags, otherwise structure using normal JSON containing normal markdown syntax. (DO NOT WRAP in markdown or json code blocks).
+The images and OCR text are provided below in order.
 '''
 
 expected_format_single_prompt = '''
@@ -321,19 +420,28 @@ expected_format_multiprompt = '''
   "title": "<title_here>",
   "date": "<date_here>",
   "summary": "<summary_here>",
+  "continuous_transcription": "<full_continuous_text>",
   "tags": ["<tag1>", "<tag2>", "<tag3>"]
 }
 '''
 
 date_format_rules = f'''
-All dates should be in the format {DATE_FORMAT_DISPLAY}, such as 2025_08_01. Do not include / in dates or any characters that would disrupt their use as a filename.
+Date formatting rules (METADATA ONLY - keep original format in transcription):
+1. In the metadata date field, format dates as {DATE_FORMAT_DISPLAY}, such as 2025_08_01.
+2. In the transcription text, keep dates in their original format exactly as they appear in the document.
+3. Do not include / in metadata dates or any characters that would disrupt their use as a filename.
 '''
 
 tag_guidance = ""
 if obsidian_tags:
     tag_guidance = f'''
 When choosing tags, consider using tags from this existing vocabulary when appropriate:
-{", ".join(obsidian_tags)}'''
+{", ".join(obsidian_tags)}
+
+CRITICAL - Tag Limit:
+- Provide EXACTLY 3 tags maximum - choose the 3 most relevant tags only
+- If fewer than 3 tags are appropriate, provide fewer
+- DO NOT exceed 3 tags under any circumstances'''
 
 single_response_prompt = single_image_prompt + \
     date_format_rules + expected_format_single_prompt + tag_guidance
@@ -494,16 +602,20 @@ for folder in folders_to_process:
         # Add summary details for multiple responses
         if len(individual_responses) > 1:
 
-            all_individual_responses = combine_responses(
-                individual_responses)
-
+            # Build content with ALL images + OCR hints
             combined_metadata = [
-                {"type": "text", "text": multi_response_prompt},
-                {"type": "text", "text": json.dumps(
-                    all_individual_responses, indent=2)}
+                {"type": "text", "text": multi_response_prompt}
             ]
 
-            logger.info('Outgoing agg API call: %s', combined_metadata)
+            # Add all images and OCR text in order
+            for pair in image_text_pairs:
+                combined_metadata.append(pair['image'])
+                if pair['text']:
+                    combined_metadata.append(
+                        {"type": "text", "text": f"\n\nOCR text:\n{pair['text']}\n"})
+
+            logger.info(
+                f'Outgoing multi-response API call with {len(image_text_pairs)} images')
 
             response = client.chat.completions.create(
                 model=model,
@@ -534,6 +646,14 @@ for folder in folders_to_process:
                 logger.error(f"Invalid JSON in final response: {e}")
                 responses[uuid]['summary']['is_valid_json'] = False
                 responses[uuid]['summary']['contents'] = response_content
+
+        # Validate output before saving
+        warnings = validate_group_output(
+            folder, folder_path, file_order, individual_responses,
+            summary=responses[uuid].get('summary')
+        )
+        if warnings:
+            responses[uuid]['validation_warnings'] = warnings
 
         # Save all responses (not overwrite)
         with open(responses_file, "w") as json_file:
