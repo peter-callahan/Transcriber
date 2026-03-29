@@ -72,7 +72,7 @@
         .image-item:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
         .image-item:hover .preview-btn { opacity: 1; }
         .image-item.selected { border-color: #007bff; }
-        .image-item img { width: 120px; height: 120px; object-fit: contain; display: block; background: #f5f5f5; }
+        .image-item img { width: var(--thumb-size, 120px); height: var(--thumb-size, 120px); object-fit: contain; display: block; background: #f5f5f5; }
         .image-item .checkbox { position: absolute; top: 5px; right: 5px; }
         .image-item .group-badge { position: absolute; top: 5px; left: 5px; background: #007bff; color: white; padding: 2px 6px; border-radius: 10px; font-size: 12px; }
         .image-item .preview-btn { position: absolute; bottom: 5px; right: 5px; background: rgba(0,0,0,0.7); color: white; border: none; border-radius: 50%; width: 28px; height: 28px; cursor: pointer; opacity: 0; transition: opacity 0.2s; display: flex; align-items: center; justify-content: center; font-size: 14px; }
@@ -83,6 +83,12 @@
         .view-btn { padding: 6px 12px; margin: 0 2px; }
         .view-btn.active { background: #007bff; color: white; }
         .sort-select { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; background: white; }
+
+        /* Thumbnail size slider */
+        .thumb-size-controls { display: flex; align-items: center; gap: 8px; }
+        .thumb-size-controls label { font-size: 14px; white-space: nowrap; }
+        .thumb-size-controls input[type=range] { width: 90px; cursor: pointer; accent-color: #007bff; }
+        .thumb-size-controls .thumb-size-value { font-size: 13px; color: #666; min-width: 36px; }
 
         /* List View Styles */
         .images-container.list-view { flex-direction: column; gap: 0; }
@@ -99,8 +105,8 @@
         .image-item.list-view:last-child { border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; margin-bottom: 0; }
         .image-item.list-view:hover { transform: none; background: #f8f9fa; }
         .image-item.list-view img {
-            width: 60px;
-            height: 60px;
+            width: var(--thumb-size, 120px);
+            height: var(--thumb-size, 120px);
             margin-right: 15px;
             border-radius: 4px;
             object-fit: contain;
@@ -299,6 +305,13 @@
                             <button class="btn btn-danger" onclick="clearAllImages()">Clear All</button>
                         </div>
                     </div>
+                </div>
+
+                <!-- Thumbnail size slider -->
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+                    <label for="thumbSizeSlider" style="font-size: 14px; white-space: nowrap;">Thumbnail size:</label>
+                    <input type="range" id="thumbSizeSlider" min="60" max="300" step="10" value="120" oninput="setThumbSize(this.value)" style="width: 120px; cursor: pointer; accent-color: #007bff;">
+                    <span id="thumbSizeValue" style="font-size: 13px; color: #666; min-width: 36px;">120px</span>
                 </div>
 
                 <!-- Filter Controls -->
@@ -1716,6 +1729,13 @@
             document.getElementById('filterStatus').textContent = statusText;
         }
 
+        // Thumbnail size
+        function setThumbSize(px) {
+            document.documentElement.style.setProperty('--thumb-size', px + 'px');
+            document.getElementById('thumbSizeValue').textContent = px + 'px';
+            localStorage.setItem('thumbSize', px);
+        }
+
         // View and Sort Functions
         function toggleView(viewType) {
             currentView = viewType;
@@ -1742,6 +1762,13 @@
         }
 
         function loadViewPreferences() {
+            // Load saved thumbnail size
+            const savedThumbSize = localStorage.getItem('thumbSize');
+            if (savedThumbSize) {
+                document.getElementById('thumbSizeSlider').value = savedThumbSize;
+                setThumbSize(savedThumbSize);
+            }
+
             // Load saved view preference
             const savedView = localStorage.getItem('imageView');
             if (savedView && (savedView === 'grid' || savedView === 'list')) {

@@ -67,13 +67,19 @@ def validate_group_output(folder, folder_path, file_order, individual_responses,
     warnings = []
 
     # --- Order check: files on disk vs order.json ---
+    # Normalize all filenames to .jpg stem for comparison, since process_images.py
+    # converts PNG/HEIC to JPEG and removes the original.
+    def stem_to_jpg(filename):
+        return os.path.splitext(filename)[0] + '.jpg'
+
     all_files_on_disk = set(
         f for f in os.listdir(folder_path)
         if f.lower().endswith(('.jpg', '.jpeg', '.png', '.heic'))
     )
-    order_set = set(file_order)
-    missing_from_order = all_files_on_disk - order_set
-    missing_from_disk = order_set - all_files_on_disk
+    disk_normalized = set(stem_to_jpg(f) for f in all_files_on_disk)
+    order_normalized = set(stem_to_jpg(f) for f in file_order)
+    missing_from_order = disk_normalized - order_normalized
+    missing_from_disk = order_normalized - disk_normalized
 
     order_source = "order.json" if os.path.exists(os.path.join(folder_path, 'order.json')) else "sorted fallback"
     if order_source == "sorted fallback":
@@ -487,6 +493,17 @@ for folder in folders_to_process:
 
     for image_file in file_order:
         image_path = os.path.join(folder_path, image_file)
+
+        # process_images.py converts non-JPEG files to .jpg — remap if original is gone
+        if not os.path.exists(image_path):
+            jpg_path = os.path.join(folder_path, os.path.splitext(image_file)[0] + ".jpg")
+            if os.path.exists(jpg_path):
+                logger.info(f"Original {image_file} not found, using converted {os.path.basename(jpg_path)}")
+                image_file = os.path.basename(jpg_path)
+                image_path = jpg_path
+            else:
+                logger.warning(f"Skipping {image_file} — file not found and no .jpg equivalent exists")
+                continue
 
         if image_file.lower().endswith((".jpg", ".jpeg", ".png", ".heic")):
             logger.info(f"Processing GPT conversion for: {image_file}")
