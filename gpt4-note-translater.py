@@ -2,7 +2,6 @@ import base64
 import json
 import os
 import sys
-import openai
 import hashlib
 import unicodedata
 import re
@@ -257,24 +256,61 @@ def clean_json_text(text):
     return text
 
 
-client = openai.OpenAI()
+# --- Provider configuration ---
+ai_provider = os.getenv('AI_PROVIDER', 'openai').lower()
+openai_model = os.getenv('OPENAI_MODEL', 'gpt-4o')
+anthropic_model = os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-4-6')
+
+if ai_provider == 'anthropic':
+    import anthropic as anthropic_sdk
+    client = anthropic_sdk.Anthropic()
+    model = anthropic_model
+else:
+    import openai
+    client = openai.OpenAI()
+    model = openai_model
+
+logger.info(f"Using AI provider: {ai_provider}, model: {model}")
+
+
+def make_image_block(base64_data):
+    """Return provider-appropriate image content block."""
+    if ai_provider == 'anthropic':
+        return {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/jpeg", "data": base64_data}
+        }
+    else:
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{base64_data}"}
+        }
+
+
+def call_api(content, max_tokens):
+    """Call the configured AI provider and return the text response."""
+    if ai_provider == 'anthropic':
+        response = client.messages.create(
+            model=model,
+            messages=[{"role": "user", "content": content}],
+            max_tokens=max_tokens
+        )
+        return response.content[0].text
+    else:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": content}],
+            max_tokens=max_tokens
+        )
+        return response.choices[0].message.content
+
 
 # Add a flag to enable mock mode
 mock_mode = False
 
-# Define a mock response
-
 
 def get_mock_response():
-    return {
-        "choices": [
-            {
-                "message": {
-                    "content": "# Mock Title\n\nThis is a mock transcription of the handwritten notes.\n\n- Mock annotation: Date: 2025-07-25\n- Mock tag: Example Subject"
-                }
-            }
-        ]
-    }
+    return "# Mock Title\n\nThis is a mock transcription of the handwritten notes.\n\n- Mock annotation: Date: 2025-07-25\n- Mock tag: Example Subject"
 
 
 def combine_responses(individual_responses):
@@ -334,13 +370,7 @@ def combine_responses(individual_responses):
 
 
 # Load config with fallback
-try:
-    with open('config.json', 'r') as f:
-        config = json.load(f)
-    input_images_dir = os.path.expanduser(config['input_folder'])
-except FileNotFoundError:
-    # Default fallback when config.json doesn't exist
-    input_images_dir = "input_images"
+input_images_dir = os.path.expanduser(os.getenv('INPUT_FOLDER', 'input_images'))
 image_paths = []
 
 for root, _, files in os.walk(input_images_dir):
@@ -350,8 +380,6 @@ for root, _, files in os.walk(input_images_dir):
             image_paths.append(image_path)
 
 responses_file = os.getenv('RESPONSES_FILE', 'responses.json')
-
-model = "gpt-4o"
 
 # Get existing Obsidian tags to guide AI tagging
 obsidian_tags_file = os.getenv('OBSIDIAN_TAGS_FILE', 'obsidian_tags.json')
@@ -511,8 +539,7 @@ for folder in folders_to_process:
 
             # Encode image
             base64_image = encode_image(image_path)
-            image_data = {"type": "image_url", "image_url": {
-                "url": f"data:image/jpeg;base64,{base64_image}"}}
+            image_data = make_image_block(base64_image)
 
             # Get corresponding text
             extracted_text = ""
@@ -543,30 +570,18 @@ for folder in folders_to_process:
                 f"Processing image {i+1}/{len(image_text_pairs)}: {pair['filename']}")
 
             # Create content for this single image
-            single_content = [
-                {"type": "text", "text": single_response_prompt},
-                {"type": "text", "text": pair['text']},
-                pair['image']
-            ]
+            single_content = [{"type": "text", "text": single_response_prompt}]
+            if pair['text']:  # Anthropic rejects empty text blocks
+                single_content.append({"type": "text", "text": pair['text']})
+            single_content.append(pair['image'])
 
             try:
                 if mock_mode:
-                    single_response = get_mock_response()
+                    content = get_mock_response()
                 else:
-                    response = client.chat.completions.create(
-                        model=model,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": single_content
-                            }
-                        ],
-                        max_tokens=10000
-                    )
-                    single_response = response.model_dump()
+                    content = call_api(single_content, max_tokens=10000)
 
                 # Parse the individual response
-                content = single_response['choices'][0]['message']['content']
                 cleaned_content = clean_json_text(content)
 
                 try:
@@ -597,7 +612,6 @@ for folder in folders_to_process:
                     }
 
                 individual_responses.append({
-                    'response': single_response,
                     'transcription': cleaned_content,
                     'is_valid_json': is_valid_json,
                     'filename': pair['filename'],
@@ -634,22 +648,10 @@ for folder in folders_to_process:
             logger.info(
                 f'Outgoing multi-response API call with {len(image_text_pairs)} images')
 
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": combined_metadata  # type: ignore
-                    }
-                ],
-                max_tokens=16384
-            )
-            multi_response = response.model_dump()
-
             logger.info(
                 f"Combined GPT Response: {len(individual_responses)} individual responses processed")
 
-            response_content = multi_response['choices'][0]['message']['content']
+            response_content = call_api(combined_metadata, max_tokens=16384)
             cleaned_content = clean_json_text(response_content)
 
             responses[uuid]['summary'] = {}

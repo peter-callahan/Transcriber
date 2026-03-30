@@ -1,7 +1,9 @@
 import os
 import shutil
-import json
 import logging
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -55,14 +57,7 @@ def empty_subfolders(root_folder):
     logger.info("- All subfolders kept intact and empty")
 
 
-# Load config with fallback
-try:
-    with open('config.json', 'r') as f:
-        config = json.load(f)
-    input_folder = os.path.expanduser(config['input_folder'])
-except FileNotFoundError:
-    # Default fallback when config.json doesn't exist
-    input_folder = "input_images"
+input_folder = os.path.expanduser(os.getenv('INPUT_FOLDER', 'input_images'))
 
 logger.info(f"Emptying all subfolders in: {input_folder}")
 logger.warning("This will delete ALL files in ALL subfolders!")

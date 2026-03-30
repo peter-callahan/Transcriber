@@ -3,6 +3,9 @@ import shutil
 import json
 import logging
 import re
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -37,17 +40,7 @@ def sanitize_filename(filename):
     return sanitized
 
 
-# Load config with fallback
-try:
-    with open('config.json', 'r') as f:
-        config = json.load(f)
-    output_dir = config.get('output_folder', './markdown_output')
-except FileNotFoundError:
-    # Default fallback when config.json doesn't exist
-    output_dir = "./markdown_output"
-
-# Expand tilde (~) for home directory if present
-output_dir = os.path.expanduser(output_dir)
+output_dir = os.path.expanduser(os.getenv('OUTPUT_FOLDER', './markdown_output'))
 
 # Create the output directory
 os.makedirs(output_dir, exist_ok=True)
@@ -91,7 +84,7 @@ for uuid, response_data in responses.items():
         safe_date = sanitize_filename(date) if date else 'Unknown_Date'
         folder_name = f"{safe_date} - {safe_title}"
 
-    elif response_data.get('individual_responses')[0]['is_valid_json']:
+    elif response_data.get('individual_responses') and response_data.get('individual_responses')[0]['is_valid_json']:
         logger.info(f"Single note detected: {uuid}")
         # Handle individual responses if present
         single_note_object = response_data.get('individual_responses')[

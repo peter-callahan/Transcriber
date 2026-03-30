@@ -6,7 +6,7 @@ from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.utils import secure_filename
 import subprocess
 from pathlib import Path
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key, dotenv_values
 from PIL import Image
 from pillow_heif import register_heif_opener
 
@@ -36,18 +36,20 @@ processing_progress = {
     'percentage': 0
 }
 
-# Load config
-with open('config.json', 'r') as f:
-    config = json.load(f)
+ENV_FILE = os.path.join(os.path.dirname(__file__), '.env')
 
-INPUT_FOLDER = os.path.expanduser(config['input_folder'])
-OUTPUT_FOLDER = os.path.expanduser(config['output_folder'])
-TEMP_FOLDER = os.path.expanduser(config['temp_folder'])
+INPUT_FOLDER = os.path.expanduser(os.getenv('INPUT_FOLDER', '/tmp/transcriber/input_images'))
+OUTPUT_FOLDER = os.path.expanduser(os.getenv('OUTPUT_FOLDER', '~/Desktop/markdown_output'))
+TEMP_FOLDER = os.path.expanduser(os.getenv('TEMP_FOLDER', '/tmp/transcriber/temp_uploads'))
 
 # Create folders if they don't exist
 os.makedirs(INPUT_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-os.makedirs(TEMP_FOLDER, exist_ok=True)
+
+# Clear temp folder on startup so stale uploads don't persist across restarts
+if os.path.exists(TEMP_FOLDER):
+    shutil.rmtree(TEMP_FOLDER)
+os.makedirs(TEMP_FOLDER)
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'heic'}
 
@@ -253,15 +255,26 @@ def upload_raw_file():
 
         file_path = os.path.join(TEMP_FOLDER, filename)
 
+        # Check file size before writing
+        if len(request.data) == 0:
+            return jsonify({'error': 'Empty file received'}), 400
+
+        # Dedup: check if identical content already exists in temp folder
+        import hashlib
+        incoming_hash = hashlib.md5(request.data).hexdigest()
+        for existing_file in os.listdir(TEMP_FOLDER):
+            existing_path = os.path.join(TEMP_FOLDER, existing_file)
+            if os.path.isfile(existing_path):
+                with open(existing_path, 'rb') as ef:
+                    if hashlib.md5(ef.read()).hexdigest() == incoming_hash:
+                        logger.info(f"Duplicate upload ignored: {filename} matches existing {existing_file}")
+                        return jsonify({'filename': existing_file, 'deduplicated': True}), 200
+
         # Write raw bytes to file
         with open(file_path, 'wb') as f:
             f.write(request.data)
 
-        # Check file size
         file_size = os.path.getsize(file_path)
-        if file_size == 0:
-            os.remove(file_path)
-            return jsonify({'error': 'Empty file received'}), 400
 
         # Verify the file is a valid image and detect actual format
         try:
@@ -543,19 +556,16 @@ def process_images():
 @app.route('/api/config')
 def get_config():
     """Get current configuration"""
-    return jsonify(config)
+    return jsonify(dotenv_values(ENV_FILE))
 
 
 @app.route('/api/config', methods=['POST'])
 def update_config():
     """Update configuration"""
-    global config
-    data = request.json
-    config.update(data)
-
-    with open('config.json', 'w') as f:
-        json.dump(config, f, indent=2)
-
+    data = request.json or {}
+    for key, value in data.items():
+        set_key(ENV_FILE, key.upper(), str(value))
+    load_dotenv(ENV_FILE, override=True)
     return jsonify({'message': 'Configuration updated'})
 
 

@@ -96,16 +96,10 @@ def extract_text_from_image(image_path, output_path, prompt=None):
         output_file.write(combined_text)
 
     logger.info(f"Text extracted and saved to {output_path}")
+    logger.info(f"OCR content ({len(combined_text)} chars): {combined_text[:200]}{'...' if len(combined_text) > 200 else ''}")
 
 
-# Load config with fallback
-try:
-    with open('config.json', 'r') as f:
-        config = json.load(f)
-    input_images_dir = os.path.expanduser(config['input_folder'])
-except FileNotFoundError:
-    # Default fallback when config.json doesn't exist
-    input_images_dir = "input_images"
+input_images_dir = os.path.expanduser(os.getenv('INPUT_FOLDER', 'input_images'))
 
 if __name__ == "__main__":
     # Check if specific group was provided as argument
@@ -120,13 +114,22 @@ if __name__ == "__main__":
 
             for image_file in file_order:
                 image_path = os.path.join(folder_path, image_file)
-                if os.path.isfile(image_path) and image_file.lower().endswith((".jpg", ".jpeg", ".png", ".heic")):
+
+                # Remap to .jpg if original was converted by process_images.py
+                if not os.path.isfile(image_path):
+                    jpg_path = os.path.join(folder_path, os.path.splitext(image_file)[0] + ".jpg")
+                    if os.path.isfile(jpg_path):
+                        logger.info(f"Original {image_file} not found, using converted {os.path.basename(jpg_path)}")
+                        image_file = os.path.basename(jpg_path)
+                        image_path = jpg_path
+                    else:
+                        logger.warning(f"Skipping OCR for {image_file} — file not found")
+                        continue
+
+                if image_file.lower().endswith((".jpg", ".jpeg", ".png", ".heic")):
                     logger.info(f"Processing OCR for: {image_file}")
-                    # Generate the output text file name
                     base_name, _ = os.path.splitext(image_file)
                     output_path = os.path.join(folder_path, f"{base_name}.txt")
-
-                    # Extract text from the image and save it
                     extract_text_from_image(image_path, output_path, prompt=None)
         else:
             logger.warning(f"Group folder {group_name} not found")

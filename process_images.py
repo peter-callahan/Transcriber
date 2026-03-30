@@ -1,9 +1,12 @@
 import os
-import json
 import sys
+import json
 import logging
 from PIL import Image
 from pillow_heif import register_heif_opener
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Register HEIF/HEIC format support
 register_heif_opener()
@@ -112,14 +115,7 @@ def resize_image(image_path, max_size=(2048, 2048)):
                 return
 
 
-# Load config with fallback
-try:
-    with open('config.json', 'r') as f:
-        config = json.load(f)
-    input_folder = os.path.expanduser(config['input_folder'])
-except FileNotFoundError:
-    # Default fallback when config.json doesn't exist
-    input_folder = "input_images"
+input_folder = os.path.expanduser(os.getenv('INPUT_FOLDER', 'input_images'))
 
 # Check if specific group was provided as argument
 if len(sys.argv) > 1:
