@@ -118,8 +118,9 @@ for uuid, response_data in responses.items():
         markdown_content += f"**Tags:** {' '.join([f'#{tag}' for tag in tags])}\n\n"
 
     # Use continuous transcription from summary if available
-    if (response_data.get('summary', {}).get('contents', {}).get('continuous_transcription')):
-        markdown_content += f"{response_data['summary']['contents']['continuous_transcription']}\n\n"
+    summary_contents = response_data.get('summary', {}).get('contents', {})
+    if isinstance(summary_contents, dict) and summary_contents.get('continuous_transcription'):
+        markdown_content += f"{summary_contents['continuous_transcription']}\n\n"
         logger.info(f"Using continuous transcription from summary for {uuid}")
     else:
         # Fall back to individual page transcriptions

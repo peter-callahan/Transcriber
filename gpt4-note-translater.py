@@ -253,6 +253,35 @@ def clean_json_text(text):
     # Keep only printable ASCII + newlines, tabs, and common Unicode
     text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', text)
 
+    # Method 4: Escape literal newlines/tabs inside JSON string values.
+    # The model correctly preserves line breaks from handwriting, but raw \n/\r/\t
+    # inside a JSON string value are invalid — they must be escaped as \\n etc.
+    # Walk char-by-char tracking string context so we only touch chars inside "...".
+    result = []
+    in_string = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == '\\' and in_string:
+            # Already-escaped sequence — copy both chars and skip ahead
+            result.append(ch)
+            if i + 1 < len(text):
+                i += 1
+                result.append(text[i])
+        elif ch == '"':
+            in_string = not in_string
+            result.append(ch)
+        elif in_string and ch == '\n':
+            result.append('\\n')
+        elif in_string and ch == '\r':
+            result.append('\\r')
+        elif in_string and ch == '\t':
+            result.append('\\t')
+        else:
+            result.append(ch)
+        i += 1
+    text = ''.join(result)
+
     return text
 
 
