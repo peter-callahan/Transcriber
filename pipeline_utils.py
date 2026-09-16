@@ -2,6 +2,7 @@ import base64
 import os
 import json
 import logging
+import time
 from dotenv import load_dotenv
 from dataclasses import dataclass, field, asdict
 from typing import Optional
@@ -221,3 +222,103 @@ def is_transient(exc):
     if isinstance(response, dict) and response.get("Error", {}).get("Code") in TRANSIENT_AWS_CODES:
         return True
     return False
+
+
+# --- Retry -----------------------------------------------------------------
+
+class ParseError(Exception):
+    """Model output is not valid JSON."""
+
+
+class StructureError(Exception):
+    """Model output parsed but is missing or mistyping a required field."""
+
+
+@dataclass
+class Attempt:
+    ok: bool
+    parsed: Optional[dict]
+    attempts: int
+    history: list
+    error: Optional[str]
+    usage: dict
+    latency_ms: int
+    raw_text: Optional[str]
+
+
+REPAIR_TEMPLATE = (
+    "The previous response could not be used: {error}. "
+    "Return the same transcription in the required JSON structure exactly as specified. "
+    "Do not change, correct, reorder, or omit any transcribed text."
+)
+BACKOFF_SECONDS = (1, 4, 10)
+
+
+def _text_message(role, text):
+    return {"role": role, "content": [{"type": "text", "text": text}]}
+
+
+def call_with_retry(messages, max_tokens, parse, max_calls=3, call_api_fn=None, sleep_fn=time.sleep):
+    """Call the model until parse() accepts the output or max_calls is spent.
+
+    Transport errors are re-sent unchanged after backoff. Parse/structure errors
+    continue the conversation with the bad output and a repair instruction.
+    Any other exception ends the attempt immediately.
+    """
+    call_api_fn = call_api_fn or call_api
+    conversation = list(messages)
+    history = []
+    usage = {"input_tokens": 0, "output_tokens": 0}
+    started = time.monotonic()
+    attempts = 0
+    raw = None
+
+    while attempts < max_calls:
+        attempts += 1
+        try:
+            raw, call_usage = call_api_fn(conversation, max_tokens)
+        except Exception as exc:
+            if is_transient(exc):
+                history.append({"kind": "transport", "error": str(exc)})
+                logger.warning(f"Transient API error on attempt {attempts}: {exc}")
+                if attempts < max_calls:
+                    sleep_fn(BACKOFF_SECONDS[min(attempts - 1, len(BACKOFF_SECONDS) - 1)])
+                continue
+            history.append({"kind": "fatal", "error": str(exc)})
+            logger.error(f"Non-retryable API error: {exc}")
+            break
+
+        usage["input_tokens"] += call_usage.get("input_tokens", 0)
+        usage["output_tokens"] += call_usage.get("output_tokens", 0)
+
+        kind = error = None
+        try:
+            parsed = parse(raw)
+        except ParseError as exc:
+            kind, error = "parse", str(exc)
+        except StructureError as exc:
+            kind, error = "structure", str(exc)
+
+        if error is None:
+            return Attempt(True, parsed, attempts, history, None, usage,
+                           int((time.monotonic() - started) * 1000), raw)
+
+        history.append({"kind": kind, "error": error})
+        logger.warning(f"Unusable model output on attempt {attempts} ({kind}): {error}")
+        conversation = conversation + [
+            _text_message("assistant", raw),
+            _text_message("user", REPAIR_TEMPLATE.format(error=error)),
+        ]
+
+    last_error = history[-1]["error"] if history else "no response"
+    return Attempt(False, None, attempts, history, last_error, usage,
+                   int((time.monotonic() - started) * 1000), raw)
+
+
+def retry_with_feedback(messages, prior_output, feedback, max_tokens, parse, **kwargs):
+    """Re-run a call with the prior output and a caller-supplied correction in context."""
+    seeded = list(messages) + [
+        _text_message("assistant", prior_output),
+        _text_message("user", feedback),
+    ]
+    return call_with_retry(seeded, max_tokens, parse, **kwargs)
