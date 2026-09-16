@@ -43,3 +43,6 @@ responses.json.bak
 # Obsidian tags
 obsidian_tags.json
 obsidian_hashtags.txt
+
+# Local worktrees
+.worktrees/
