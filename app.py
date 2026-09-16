@@ -2,14 +2,20 @@ import os
 import json
 import shutil
 import logging
+from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.utils import secure_filename
-import subprocess
 from pathlib import Path
 from dotenv import load_dotenv, set_key, dotenv_values
 from PIL import Image
 from pillow_heif import register_heif_opener
 import fitz  # PyMuPDF
+
+import process_images
+import googlevision_translater
+import note_translater
+import export_responses
+from pipeline_utils import atomic_write_json, INPUT_FOLDER
 
 # Register HEIF/HEIC format support
 register_heif_opener()
@@ -26,22 +32,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global variable to store processing progress
-processing_progress = {
-    'status': 'idle',
-    'current_group': 0,
-    'total_groups': 0,
-    'current_step': '',
-    'completed_groups': 0,
-    'failed_groups': [],
-    'percentage': 0
+def _new_progress():
+    return {
+        'status': 'idle',
+        'run_id': None,
+        'total_groups': 0,
+        'current_group': 0,
+        'completed_groups': 0,
+        'percentage': 0,
+        'current_step': '',
+        'groups': [],
+    }
+
+
+processing_progress = _new_progress()
+
+PIPELINE = {
+    'resize': process_images.process_group,
+    'ocr': googlevision_translater.process_group,
+    'transcribe': note_translater.process_group,
+    'export': export_responses.export_run,
 }
 
 ENV_FILE = os.path.join(os.path.dirname(__file__), '.env')
 
-INPUT_FOLDER = os.path.expanduser(os.getenv('INPUT_FOLDER', '/tmp/transcriber/input_images'))
 OUTPUT_FOLDER = os.path.expanduser(os.getenv('OUTPUT_FOLDER', '~/Desktop/markdown_output'))
 TEMP_FOLDER = os.path.expanduser(os.getenv('TEMP_FOLDER', '/tmp/transcriber/temp_uploads'))
+RUN_STATUS_FILE = os.getenv('RUN_STATUS_FILE', 'run_status.json')
+CURRENT_RESPONSES_FILE = os.getenv('CURRENT_RESPONSES_FILE', 'responses_current.json')
 
 # Create folders if they don't exist
 os.makedirs(INPUT_FOLDER, exist_ok=True)
@@ -458,191 +476,146 @@ def clear_temp():
         return jsonify({'error': f'Failed to clear temp files: {str(e)}'}), 500
 
 
+def _persist_progress():
+    atomic_write_json(RUN_STATUS_FILE, processing_progress)
+
+
+def _update_group(group_name, **fields):
+    for entry in processing_progress['groups']:
+        if entry['name'] == group_name:
+            entry.update(fields)
+            break
+    _persist_progress()
+
+
+def _fail_group(group_name, error, failed_groups):
+    logger.warning(f'Group {group_name} failed: {error}')
+    _update_group(group_name, status='failed', error=error)
+    failed_groups.append(group_name)
+
+
 @app.route('/api/process', methods=['POST'])
-def process_images():
-    """Run the complete processing pipeline with groups"""
-    try:
-        data = request.json
-        logger.info(f"Received processing request with data: {data}")
-        groups = data.get('groups', [])
-        logger.info(f"Extracted {len(groups)} groups from request")
+def process_images_route():
+    """Run the pipeline for every group in-process; a failed group never stops the run."""
+    data = request.json or {}
+    groups = data.get('groups', [])
+    logger.info(f"Received processing request with {len(groups)} groups")
+    if not groups:
+        return jsonify({'error': 'No image groups provided'}), 400
 
-        for i, group in enumerate(groups):
-            logger.info(f"Group {i}: {group}")
+    run_id = datetime.now().isoformat(timespec='seconds')
 
-        if not groups:
-            return jsonify({'error': 'No image groups provided'}), 400
+    # Start of run: clear last run's retry window and the input folder
+    if os.path.exists(CURRENT_RESPONSES_FILE):
+        os.remove(CURRENT_RESPONSES_FILE)
+    if os.path.exists(INPUT_FOLDER):
+        shutil.rmtree(INPUT_FOLDER)
+    os.makedirs(INPUT_FOLDER, exist_ok=True)
 
-        # Step 1: Clear existing input folders
-        if os.path.exists(INPUT_FOLDER):
-            shutil.rmtree(INPUT_FOLDER)
-        os.makedirs(INPUT_FOLDER, exist_ok=True)
+    processing_progress.clear()
+    processing_progress.update(_new_progress())
+    processing_progress.update({
+        'status': 'processing', 'run_id': run_id, 'total_groups': len(groups),
+        'current_step': 'Starting processing',
+        'groups': [{
+            'name': f"n{i+1}",
+            'label': f"{len(g.get('images', []))} page{'s' if len(g.get('images', [])) != 1 else ''}",
+            'status': 'pending', 'stage': None,
+            'pages_done': 0, 'pages_total': len(g.get('images', [])),
+            'attempts': 0, 'warnings': [], 'error': None,
+        } for i, g in enumerate(groups)],
+    })
+    _persist_progress()
 
-        # Step 2: Create folders for each group and move images
-        for i, group in enumerate(groups):
-            group_name = f"n{i+1}"
-            group_folder = os.path.join(INPUT_FOLDER, group_name)
-            os.makedirs(group_folder, exist_ok=True)
+    for i, group in enumerate(groups):
+        group_name = f"n{i+1}"
+        group_folder = os.path.join(INPUT_FOLDER, group_name)
+        os.makedirs(group_folder, exist_ok=True)
+        images = group.get('images', [])
+        for image_file in images:
+            temp_path = os.path.join(TEMP_FOLDER, image_file)
+            if os.path.exists(temp_path):
+                shutil.copy2(temp_path, os.path.join(group_folder, image_file))
+            else:
+                logger.error(f"File not found in temp: {temp_path}")
+        with open(os.path.join(group_folder, 'order.json'), 'w') as f:
+            json.dump({'files': images}, f, indent=2)
 
-            images_in_group = group.get('images', [])
-            logger.info(f"Group {group_name} has {len(images_in_group)} images: {images_in_group}")
+    results, failed_groups = [], []
+    completed = 0
 
-            for image_file in images_in_group:
-                temp_path = os.path.join(TEMP_FOLDER, image_file)
-                new_path = os.path.join(group_folder, image_file)
-                logger.info(f"Attempting to copy {temp_path} to {new_path}")
-                if os.path.exists(temp_path):
-                    shutil.copy2(temp_path, new_path)
-                    logger.info(f"Successfully copied {image_file}")
-                else:
-                    logger.error(f"File not found in temp: {temp_path}")
-
-            # Write order.json to preserve UI order
-            order_file = os.path.join(group_folder, 'order.json')
-            with open(order_file, 'w') as f:
-                json.dump({'files': images_in_group}, f, indent=2)
-            logger.info(f"Wrote file order to {order_file}: {images_in_group}")
-
-        # Step 3: Process each group sequentially
-        global processing_progress
-        completed_groups = 0
-        failed_groups = []
-
-        # Initialize progress tracking
+    for i, group in enumerate(groups):
+        group_name = f"n{i+1}"
         processing_progress.update({
-            'status': 'processing',
-            'total_groups': len(groups),
-            'current_group': 0,
-            'current_step': 'Starting processing',
-            'completed_groups': 0,
-            'failed_groups': [],
-            'percentage': 0
+            'current_group': i + 1,
+            'current_step': f'Processing {group_name}',
+            'percentage': int((i / len(groups)) * 100),
         })
-
-        for i, group in enumerate(groups):
-            group_name = f"n{i+1}"
-            logger.info(f"Processing group {group_name} ({i+1}/{len(groups)})")
-
-            # Update progress
-            processing_progress.update({
-                'current_group': i + 1,
-                'current_step': f'Processing group {group_name}',
-                'percentage': int((i / len(groups)) * 100)
-            })
-
-            try:
-                # Resize images for this group
-                processing_progress['current_step'] = f'Resizing images for {group_name}'
-                result = subprocess.run(['python', 'process_images.py', group_name],
-                                        cwd=os.getcwd(), capture_output=True, text=True)
-                logger.info(f'process_images.py STDOUT: {result.stdout}')
-                logger.info(f'process_images.py STDERR: {result.stderr}')
-                if result.returncode != 0:
-                    logger.warning(f'Image processing failed for {group_name}')
-                    failed_groups.append(f'{group_name} (image processing)')
-                    continue
-
-                # OCR with Google Vision for this group
-                processing_progress['current_step'] = f'Running OCR for {group_name}'
-                env = os.environ.copy()
-                env['GOOGLE_APPLICATION_CREDENTIALS'] = os.getenv(
-                    'GOOGLE_APPLICATION_CREDENTIALS')
-                result = subprocess.run(['python', 'googlevision-translater.py', group_name],
-                                        cwd=os.getcwd(), env=env, capture_output=True, text=True)
-                logger.info(f'googlevision-translater.py STDOUT: {result.stdout}')
-                logger.info(f'googlevision-translater.py STDERR: {result.stderr}')
-                if result.returncode != 0:
-                    logger.warning(f'OCR processing failed for {group_name}')
-                    failed_groups.append(f'{group_name} (OCR)')
-                    continue
-
-                # Text conversion with GPT-4 for this group
-                processing_progress['current_step'] = f'Converting text for {group_name}'
-                env = os.environ.copy()
-                openai_key = os.getenv('OPENAI_API_KEY')
-                env['OPENAI_API_KEY'] = openai_key
-                result = subprocess.run(['python', 'gpt4-note-translater.py', group_name],
-                                        cwd=os.getcwd(), env=env, capture_output=True, text=True)
-                logger.info(f'gpt4-note-translater.py STDOUT: {result.stdout}')
-                logger.info(f'gpt4-note-translater.py STDERR: {result.stderr}')
-                if result.returncode != 0:
-                    logger.warning(f'Text conversion failed for {group_name}')
-                    failed_groups.append(f'{group_name} (text conversion)')
-                    continue
-
-                completed_groups += 1
-                logger.info(f"Successfully completed group {group_name}")
-
-                # Update progress after successful completion
-                processing_progress.update({
-                    'completed_groups': completed_groups,
-                    'current_step': f'Completed {group_name}',
-                    'percentage': int(((i + 1) / len(groups)) * 100)
-                })
-
-            except Exception as e:
-                logger.error(f'Error processing group {group_name}: {str(e)}')
-                failed_groups.append(f'{group_name} (error: {str(e)})')
+        _update_group(group_name, status='running', stage='resizing')
+        try:
+            stage = PIPELINE['resize'](group_name, input_dir=INPUT_FOLDER)
+            if not stage.ok:
+                _fail_group(group_name, f'image processing: {stage.error}', failed_groups)
                 continue
 
-        # Export all completed responses at the end
-        if completed_groups > 0:
-            processing_progress['current_step'] = 'Exporting results'
-            result = subprocess.run(['python', 'export_responses.py'],
-                                    cwd=os.getcwd())
-            if result.returncode != 0:
-                logger.warning('Export failed')
+            _update_group(group_name, stage='ocr')
+            stage = PIPELINE['ocr'](group_name, input_dir=INPUT_FOLDER)
+            if not stage.ok:
+                _fail_group(group_name, f'OCR: {stage.error}', failed_groups)
+                continue
 
-            # Delete temp run file now that export is done
-            current_responses_file = os.getenv('CURRENT_RESPONSES_FILE', 'responses_current.json')
-            if os.path.exists(current_responses_file):
-                os.remove(current_responses_file)
-                logger.info(f'Deleted temp run file: {current_responses_file}')
+            result = PIPELINE['transcribe'](
+                group_name, on_update=_update_group, input_dir=INPUT_FOLDER, run_id=run_id)
+            results.append(result.to_dict())
+            if result.status == 'failed':
+                failed_groups.append(group_name)
+            else:
+                completed += 1
+        except Exception as e:
+            logger.exception(f'Unexpected error processing {group_name}')
+            _fail_group(group_name, f'unexpected error: {e}', failed_groups)
+        finally:
+            processing_progress.update({
+                'completed_groups': completed,
+                'percentage': int(((i + 1) / len(groups)) * 100),
+            })
+            _persist_progress()
 
-        # Step 4: Clear temp files after successful processing
-        processing_progress['current_step'] = 'Cleaning up temporary files'
-        for filename in os.listdir(TEMP_FOLDER):
-            file_path = os.path.join(TEMP_FOLDER, filename)
-            if os.path.isfile(file_path):
-                os.remove(file_path)
+    if completed:
+        processing_progress['current_step'] = 'Exporting results'
+        _persist_progress()
+        exportable = [r for r in results if r['status'] in ('done', 'warning')]
+        for report in PIPELINE['export'](exportable, OUTPUT_FOLDER):
+            if not report['ok']:
+                completed -= 1
+                _fail_group(report['group_name'], f"export: {report['error']}", failed_groups)
 
-        # Prepare response message
-        message = f'Processing completed: {completed_groups}/{len(groups)} groups successful'
-        if failed_groups:
-            message += f', {len(failed_groups)} failed'
+    processing_progress['current_step'] = 'Cleaning up temporary files'
+    for filename in os.listdir(TEMP_FOLDER):
+        file_path = os.path.join(TEMP_FOLDER, filename)
+        if os.path.isfile(file_path):
+            os.remove(file_path)
 
-        # Update final progress status
-        processing_progress.update({
-            'status': 'completed',
-            'current_step': 'Processing complete',
-            'percentage': 100,
-            'completed_groups': completed_groups,
-            'failed_groups': failed_groups
-        })
+    message = f'Processing completed: {completed}/{len(groups)} groups successful'
+    if failed_groups:
+        message += f', {len(failed_groups)} failed'
+    processing_progress.update({
+        'status': 'completed', 'current_step': 'Processing complete',
+        'percentage': 100, 'completed_groups': completed,
+    })
+    _persist_progress()
 
-        response_data = {
-            'message': message,
-            'groups_processed': completed_groups,
-            'total_groups': len(groups),
-            'failed_groups': failed_groups
-        }
-
-        # Return appropriate status code
-        if completed_groups == 0:
-            return jsonify(response_data), 500
-        elif failed_groups:
-            return jsonify(response_data), 207  # Partial success
-        else:
-            return jsonify(response_data), 200
-
-    except Exception as e:
-        # Update progress on error
-        processing_progress.update({
-            'status': 'error',
-            'current_step': f'Error: {str(e)}',
-            'percentage': 0
-        })
-        return jsonify({'error': f'Processing failed: {str(e)}'}), 500
+    response_data = {
+        'message': message,
+        'groups_processed': completed,
+        'total_groups': len(groups),
+        'failed_groups': failed_groups,
+    }
+    if completed == 0:
+        return jsonify(response_data), 500
+    if failed_groups:
+        return jsonify(response_data), 207
+    return jsonify(response_data), 200
 
 
 SENSITIVE_KEY_PATTERNS = ('_KEY', '_CREDENTIALS', '_SECRET', '_TOKEN', '_PASSWORD')
@@ -674,7 +647,13 @@ def update_config():
 
 @app.route('/api/progress')
 def get_progress():
-    """Get current processing progress"""
+    """Live progress, or the last run's saved status when idle."""
+    if processing_progress.get('status') == 'idle' and os.path.exists(RUN_STATUS_FILE):
+        try:
+            with open(RUN_STATUS_FILE) as f:
+                return jsonify(json.load(f))
+        except (OSError, json.JSONDecodeError):
+            pass
     return jsonify(processing_progress)
 
 
