@@ -41,19 +41,17 @@ def sanitize_filename(filename):
 
 
 output_dir = os.path.expanduser(os.getenv('OUTPUT_FOLDER', './markdown_output'))
+current_responses_file = os.getenv('CURRENT_RESPONSES_FILE', 'responses_current.json')
 
 # Create the output directory
 os.makedirs(output_dir, exist_ok=True)
 
-# Check if responses.json exists, create if it doesn't
-if not os.path.exists("responses.json"):
-    logger.info("No responses.json file found. Creating empty file.")
-    with open("responses.json", "w") as json_file:
-        json.dump({}, json_file)
+# Load current run responses (written by gpt4-note-translater.py for this run only)
+if not os.path.exists(current_responses_file):
+    logger.warning(f"No {current_responses_file} found — nothing to export.")
     responses = {}
 else:
-    # Load the JSON data
-    with open("responses.json", "r") as json_file:
+    with open(current_responses_file, "r") as json_file:
         responses = json.load(json_file)
 
 # Iterate through each response

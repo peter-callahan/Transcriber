@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv, set_key, dotenv_values
 from PIL import Image
 from pillow_heif import register_heif_opener
+import fitz  # PyMuPDF
 
 # Register HEIF/HEIC format support
 register_heif_opener()
@@ -51,7 +52,9 @@ if os.path.exists(TEMP_FOLDER):
     shutil.rmtree(TEMP_FOLDER)
 os.makedirs(TEMP_FOLDER)
 
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'heic'}
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'heic', 'pdf'}
+PDF_DPI = 150
+PDF_MAX_PAGES = 100
 
 
 def allowed_file(filename):
@@ -77,6 +80,65 @@ def convert_heic_to_jpeg(file_path):
     except Exception as e:
         logger.error(f"Error converting HEIC file {file_path}: {e}")
         return file_path, False
+
+
+def convert_pdf_to_images(file_path, original_filename):
+    """Convert a PDF to a list of JPEG page dicts for upload_files() response.
+
+    Each dict has: name, original_name, path, size, source_pdf.
+    Raises ValueError for password-protected PDFs.
+    Raises RuntimeError for zero-page or unopenable PDFs.
+    """
+    results = []
+    secured_stem = os.path.splitext(os.path.basename(file_path))[0]
+
+    try:
+        doc = fitz.open(file_path)
+    except Exception as e:
+        raise RuntimeError(f"Failed to open PDF: {e}")
+
+    try:
+        if doc.is_encrypted and not doc.authenticate(""):
+            raise ValueError("PDF is password-protected and cannot be processed")
+
+        page_count = min(doc.page_count, PDF_MAX_PAGES)
+        if page_count == 0:
+            raise RuntimeError("PDF contains no pages")
+
+        if doc.page_count > PDF_MAX_PAGES:
+            logger.warning(
+                f"PDF '{original_filename}' has {doc.page_count} pages; "
+                f"only the first {PDF_MAX_PAGES} will be extracted"
+            )
+
+        zoom = PDF_DPI / 72.0
+        mat = fitz.Matrix(zoom, zoom)
+
+        for page_num in range(page_count):
+            page = doc.load_page(page_num)
+            pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB, alpha=False)
+
+            page_filename = f"{secured_stem}_p{page_num + 1:03d}.jpg"
+            base = page_filename
+            counter = 1
+            while os.path.exists(os.path.join(TEMP_FOLDER, page_filename)):
+                page_filename = f"{os.path.splitext(base)[0]}_{counter}.jpg"
+                counter += 1
+
+            page_path = os.path.join(TEMP_FOLDER, page_filename)
+            pix.save(page_path, jpg_quality=85)
+
+            results.append({
+                'name': page_filename,
+                'original_name': original_filename,
+                'path': f'/api/temp/{page_filename}',
+                'size': os.path.getsize(page_path),
+                'source_pdf': os.path.basename(original_filename),
+            })
+    finally:
+        doc.close()
+
+    return results
 
 
 @app.route('/')
@@ -171,6 +233,27 @@ def upload_files():
                             os.remove(file_path)
                         errors.append(
                             f'{original_filename}: HEIC conversion error - {str(e)}')
+                        continue
+
+                # Convert PDF to JPEG pages (1 PDF → N images)
+                elif filename.lower().endswith('.pdf'):
+                    try:
+                        page_files = convert_pdf_to_images(file_path, original_filename)
+                        os.remove(file_path)
+                        if len(page_files) == 0:
+                            errors.append(f'{original_filename}: PDF produced no images')
+                            continue
+                        uploaded_files.extend(page_files)
+                        continue  # skip the normal .append() below
+                    except ValueError as e:
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                        errors.append(f'{original_filename}: {e}')
+                        continue
+                    except Exception as e:
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                        errors.append(f'{original_filename}: PDF conversion error - {str(e)}')
                         continue
 
                 uploaded_files.append({
@@ -316,14 +399,17 @@ def get_temp_image(filename):
     return send_file(os.path.join(TEMP_FOLDER, filename))
 
 
+TEMP_IMAGE_EXTENSIONS = {'jpg', 'jpeg', 'png', 'heic'}
+
 @app.route('/api/temp', methods=['GET'])
 def list_temp_files():
-    """List all files currently in temp folder"""
+    """List image files currently in temp folder (PDFs excluded — they are transient)"""
     try:
         files = []
         for filename in os.listdir(TEMP_FOLDER):
             file_path = os.path.join(TEMP_FOLDER, filename)
-            if os.path.isfile(file_path):
+            ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+            if os.path.isfile(file_path) and ext in TEMP_IMAGE_EXTENSIONS:
                 files.append({
                     'name': filename,
                     'original_name': filename,
@@ -507,6 +593,12 @@ def process_images():
             if result.returncode != 0:
                 logger.warning('Export failed')
 
+            # Delete temp run file now that export is done
+            current_responses_file = os.getenv('CURRENT_RESPONSES_FILE', 'responses_current.json')
+            if os.path.exists(current_responses_file):
+                os.remove(current_responses_file)
+                logger.info(f'Deleted temp run file: {current_responses_file}')
+
         # Step 4: Clear temp files after successful processing
         processing_progress['current_step'] = 'Cleaning up temporary files'
         for filename in os.listdir(TEMP_FOLDER):
@@ -553,16 +645,27 @@ def process_images():
         return jsonify({'error': f'Processing failed: {str(e)}'}), 500
 
 
+SENSITIVE_KEY_PATTERNS = ('_KEY', '_CREDENTIALS', '_SECRET', '_TOKEN', '_PASSWORD')
+
+
+def is_sensitive(key):
+    return any(key.upper().endswith(pat) for pat in SENSITIVE_KEY_PATTERNS)
+
+
 @app.route('/api/config')
 def get_config():
-    """Get current configuration"""
-    return jsonify(dotenv_values(ENV_FILE))
+    """Get current configuration, with sensitive keys redacted."""
+    config = dotenv_values(ENV_FILE)
+    return jsonify({k: '***' if is_sensitive(k) else v for k, v in config.items()})
 
 
 @app.route('/api/config', methods=['POST'])
 def update_config():
-    """Update configuration"""
+    """Update configuration, rejecting sensitive keys."""
     data = request.json or {}
+    rejected = [k for k in data if is_sensitive(k)]
+    if rejected:
+        return jsonify({'error': f'Cannot set sensitive keys via API: {rejected}'}), 400
     for key, value in data.items():
         set_key(ENV_FILE, key.upper(), str(value))
     load_dotenv(ENV_FILE, override=True)

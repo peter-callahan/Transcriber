@@ -80,48 +80,60 @@ def validate_group_output(folder, folder_path, file_order, individual_responses,
     missing_from_order = disk_normalized - order_normalized
     missing_from_disk = order_normalized - disk_normalized
 
-    order_source = "order.json" if os.path.exists(os.path.join(folder_path, 'order.json')) else "sorted fallback"
+    order_source = "order.json" if os.path.exists(
+        os.path.join(folder_path, 'order.json')) else "sorted fallback"
     if order_source == "sorted fallback":
-        warnings.append(f"No order.json found — using alphabetical sort. Pages may be out of order.")
+        warnings.append(
+            f"No order.json found — using alphabetical sort. Pages may be out of order.")
     if missing_from_order:
-        warnings.append(f"Files on disk not in order list (will be skipped): {sorted(missing_from_order)}")
+        warnings.append(
+            f"Files on disk not in order list (will be skipped): {sorted(missing_from_order)}")
     if missing_from_disk:
-        warnings.append(f"Files in order list not found on disk (will be missing): {sorted(missing_from_disk)}")
+        warnings.append(
+            f"Files in order list not found on disk (will be missing): {sorted(missing_from_disk)}")
 
     # --- JSON validity rate ---
     total = len(individual_responses)
-    invalid = [r['filename'] for r in individual_responses if not r.get('is_valid_json')]
+    invalid = [r['filename']
+               for r in individual_responses if not r.get('is_valid_json')]
     if invalid:
-        warnings.append(f"Invalid JSON from model for {len(invalid)}/{total} pages: {invalid}")
+        warnings.append(
+            f"Invalid JSON from model for {len(invalid)}/{total} pages: {invalid}")
 
     # --- Empty/suspiciously short transcriptions ---
     MIN_TRANSCRIPTION_LENGTH = 20
     for r in individual_responses:
         text = r.get('normalized', {}).get('transcription', '')
         if len(text.strip()) < MIN_TRANSCRIPTION_LENGTH:
-            warnings.append(f"Suspiciously short transcription for {r['filename']!r} ({len(text.strip())} chars) — may be a failed page")
+            warnings.append(
+                f"Suspiciously short transcription for {r['filename']!r} ({len(text.strip())} chars) — may be a failed page")
 
     # --- Tag count ---
     for r in individual_responses:
         tags = r.get('normalized', {}).get('tags', [])
         if len(tags) > 3:
-            warnings.append(f"Too many tags ({len(tags)}) returned for {r['filename']!r} — expected 3 max: {tags}")
+            warnings.append(
+                f"Too many tags ({len(tags)}) returned for {r['filename']!r} — expected 3 max: {tags}")
 
     if summary:
         contents = summary.get('contents', {})
         if summary.get('is_valid_json') and isinstance(contents, dict):
             summary_tags = contents.get('tags', [])
             if len(summary_tags) > 3:
-                warnings.append(f"Summary response returned {len(summary_tags)} tags — expected 3 max: {summary_tags}")
+                warnings.append(
+                    f"Summary response returned {len(summary_tags)} tags — expected 3 max: {summary_tags}")
             continuous = contents.get('continuous_transcription', '')
             if len(continuous.strip()) < MIN_TRANSCRIPTION_LENGTH:
-                warnings.append(f"Continuous transcription in summary is suspiciously short ({len(continuous.strip())} chars)")
+                warnings.append(
+                    f"Continuous transcription in summary is suspiciously short ({len(continuous.strip())} chars)")
         elif not summary.get('is_valid_json'):
-            warnings.append("Summary (multi-page) response returned invalid JSON")
+            warnings.append(
+                "Summary (multi-page) response returned invalid JSON")
 
     # Log all warnings
     if warnings:
-        logger.warning(f"[VALIDATION] Group {folder!r} — {len(warnings)} issue(s) found:")
+        logger.warning(
+            f"[VALIDATION] Group {folder!r} — {len(warnings)} issue(s) found:")
         for w in warnings:
             logger.warning(f"  - {w}")
     else:
@@ -289,11 +301,21 @@ def clean_json_text(text):
 ai_provider = os.getenv('AI_PROVIDER', 'openai').lower()
 openai_model = os.getenv('OPENAI_MODEL', 'gpt-4o')
 anthropic_model = os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-4-6')
+bedrock_model = os.getenv('BEDROCK_MODEL', '')
 
 if ai_provider == 'anthropic':
     import anthropic as anthropic_sdk
     client = anthropic_sdk.Anthropic()
     model = anthropic_model
+elif ai_provider == 'bedrock':
+    import boto3
+    from botocore.config import Config as BotocoreConfig
+    client = boto3.client(
+        'bedrock-runtime',
+        region_name=os.getenv('AWS_REGION', 'us-east-1'),
+        config=BotocoreConfig(read_timeout=300, connect_timeout=10)
+    )
+    model = bedrock_model
 else:
     import openai
     client = openai.OpenAI()
@@ -309,11 +331,33 @@ def make_image_block(base64_data):
             "type": "image",
             "source": {"type": "base64", "media_type": "image/jpeg", "data": base64_data}
         }
+    elif ai_provider == 'bedrock':
+        # Bedrock converse expects raw bytes, not base64
+        return {
+            "type": "bedrock_image",
+            "bytes": base64.b64decode(base64_data)
+        }
     else:
         return {
             "type": "image_url",
             "image_url": {"url": f"data:image/jpeg;base64,{base64_data}"}
         }
+
+
+def _to_bedrock_content(content):
+    """Translate internal content block list to Bedrock converse format."""
+    result = []
+    for block in content:
+        if block.get("type") == "text":
+            result.append({"text": block["text"]})
+        elif block.get("type") == "bedrock_image":
+            result.append({
+                "image": {
+                    "format": "jpeg",
+                    "source": {"bytes": block["bytes"]}
+                }
+            })
+    return result
 
 
 def call_api(content, max_tokens):
@@ -325,6 +369,14 @@ def call_api(content, max_tokens):
             max_tokens=max_tokens
         )
         return response.content[0].text
+    elif ai_provider == 'bedrock':
+        response = client.converse(
+            modelId=model,
+            messages=[
+                {"role": "user", "content": _to_bedrock_content(content)}],
+            inferenceConfig={"maxTokens": max_tokens}
+        )
+        return response['output']['message']['content'][0]['text']
     else:
         response = client.chat.completions.create(
             model=model,
@@ -399,7 +451,8 @@ def combine_responses(individual_responses):
 
 
 # Load config with fallback
-input_images_dir = os.path.expanduser(os.getenv('INPUT_FOLDER', 'input_images'))
+input_images_dir = os.path.expanduser(
+    os.getenv('INPUT_FOLDER', 'input_images'))
 image_paths = []
 
 for root, _, files in os.walk(input_images_dir):
@@ -409,6 +462,7 @@ for root, _, files in os.walk(input_images_dir):
             image_paths.append(image_path)
 
 responses_file = os.getenv('RESPONSES_FILE', 'responses.json')
+current_responses_file = os.getenv('CURRENT_RESPONSES_FILE', 'responses_current.json')
 
 # Get existing Obsidian tags to guide AI tagging
 obsidian_tags_file = os.getenv('OBSIDIAN_TAGS_FILE', 'obsidian_tags.json')
@@ -518,6 +572,25 @@ try:
 except (FileNotFoundError, json.JSONDecodeError):
     responses = {}
 
+# Load any previous groups from this pipeline run so multi-group exports accumulate.
+# responses_current.json is deleted by app.py after each export, so there's no
+# cross-run contamination — absence of the file is the natural reset boundary.
+try:
+    with open(current_responses_file, "r") as f:
+        current_run = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    current_run = {}
+
+
+def unique_history_key(history, uuid):
+    """Return uuid, or uuid_1, uuid_2, etc. if it already exists in history."""
+    if uuid not in history:
+        return uuid
+    n = 1
+    while f"{uuid}_{n}" in history:
+        n += 1
+    return f"{uuid}_{n}"
+
 
 # Check if specific group was provided as argument
 if len(sys.argv) > 1:
@@ -553,13 +626,16 @@ for folder in folders_to_process:
 
         # process_images.py converts non-JPEG files to .jpg — remap if original is gone
         if not os.path.exists(image_path):
-            jpg_path = os.path.join(folder_path, os.path.splitext(image_file)[0] + ".jpg")
+            jpg_path = os.path.join(
+                folder_path, os.path.splitext(image_file)[0] + ".jpg")
             if os.path.exists(jpg_path):
-                logger.info(f"Original {image_file} not found, using converted {os.path.basename(jpg_path)}")
+                logger.info(
+                    f"Original {image_file} not found, using converted {os.path.basename(jpg_path)}")
                 image_file = os.path.basename(jpg_path)
                 image_path = jpg_path
             else:
-                logger.warning(f"Skipping {image_file} — file not found and no .jpg equivalent exists")
+                logger.warning(
+                    f"Skipping {image_file} — file not found and no .jpg equivalent exists")
                 continue
 
         if image_file.lower().endswith((".jpg", ".jpeg", ".png", ".heic")):
@@ -585,11 +661,6 @@ for folder in folders_to_process:
 
     if image_text_pairs:
         uuid = generate_uuid(image_list, model)
-
-        # Check if UUID already exists in cache
-        if uuid in responses:
-            logger.info(f"UUID {uuid} found in cache. Serving from cache.")
-            continue
 
         # Process each image/text pair individually
         individual_responses = []
@@ -652,12 +723,19 @@ for folder in folders_to_process:
                 continue
 
         # Prepare data for this UUID
-        responses[uuid] = {}
-        responses[uuid]["image_paths"] = [os.path.join(
+        group_data = {}
+        group_data["image_paths"] = [os.path.join(
             folder_path, img) for img in image_list]
-        responses[uuid]["file_order"] = file_order
-        responses[uuid]["group_name"] = folder
-        responses[uuid]['individual_responses'] = individual_responses
+        group_data["file_order"] = file_order
+        group_data["group_name"] = folder
+        group_data['individual_responses'] = individual_responses
+
+        # Write to current run (always bare UUID — fresh each run)
+        current_run[uuid] = group_data
+
+        # Write to history log (deduplicated key if UUID already exists)
+        history_key = unique_history_key(responses, uuid)
+        responses[history_key] = group_data
 
         # Add summary details for multiple responses
         if len(individual_responses) > 1:
@@ -680,30 +758,34 @@ for folder in folders_to_process:
             logger.info(
                 f"Combined GPT Response: {len(individual_responses)} individual responses processed")
 
-            response_content = call_api(combined_metadata, max_tokens=16384)
+            response_content = call_api(combined_metadata, max_tokens=64000)
             cleaned_content = clean_json_text(response_content)
 
-            responses[uuid]['summary'] = {}
+            group_data['summary'] = {}
 
             try:
                 parsed_content = json.loads(cleaned_content)
-                responses[uuid]['summary']['is_valid_json'] = True
-                responses[uuid]['summary']['contents'] = parsed_content
+                group_data['summary']['is_valid_json'] = True
+                group_data['summary']['contents'] = parsed_content
 
             except json.JSONDecodeError as e:
                 logger.error(f"Invalid JSON in final response: {e}")
-                responses[uuid]['summary']['is_valid_json'] = False
-                responses[uuid]['summary']['contents'] = response_content
+                group_data['summary']['is_valid_json'] = False
+                group_data['summary']['contents'] = response_content
 
         # Validate output before saving
         warnings = validate_group_output(
             folder, folder_path, file_order, individual_responses,
-            summary=responses[uuid].get('summary')
+            summary=group_data.get('summary')
         )
         if warnings:
-            responses[uuid]['validation_warnings'] = warnings
+            group_data['validation_warnings'] = warnings
 
-        # Save all responses (not overwrite)
+        # Save current run for export (temp file, overwritten each group)
+        with open(current_responses_file, "w") as json_file:
+            json.dump(current_run, json_file, indent=4)
+
+        # Append to permanent history log
         with open(responses_file, "w") as json_file:
             json.dump(responses, json_file, indent=4)
 

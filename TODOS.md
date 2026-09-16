@@ -18,7 +18,7 @@
 
 ---
 
-### [TODO-4] Protect /api/config from exposing API keys
+### DONE - [TODO-4] Protect /api/config from exposing API keys
 **What:** Strip sensitive keys (matching `*_KEY` and `*_CREDENTIALS`) from the GET /api/config response.
 **Why:** The endpoint currently returns the full .env including OPENAI_API_KEY and ANTHROPIC_API_KEY. Flask runs on 0.0.0.0:5001 — anyone on the same network can read your keys.
 **Context:** app.py:556. The fix is ~5 lines: filter the dotenv_values dict before returning it. The POST endpoint should only accept non-sensitive keys.

@@ -260,8 +260,12 @@
         <div class="upload-area" id="uploadArea">
             <div>
                 <h3>Drop photos here or click to select</h3>
-                <input type="file" id="fileInput" multiple accept="image/*" style="display: none;">
+                <input type="file" id="fileInput" multiple accept="image/*,.pdf" style="display: none;">
                 <button class="btn" onclick="event.stopPropagation(); document.getElementById('fileInput').click()">Choose Files</button>
+                <div style="margin-top: 12px; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                    <input type="checkbox" id="autoGroupPdf" onchange="saveAutoGroupPreference()">
+                    <label for="autoGroupPdf" style="font-size: 14px; color: #555; cursor: pointer; user-select: none;">Auto-group PDF pages</label>
+                </div>
             </div>
         </div>
 
@@ -453,6 +457,7 @@
         let imageGroups = [];
         let currentView = 'grid';
         let currentSort = 'upload';
+        let autoGroupPdf = false;
         let uploadQueue = [];
         let isUploading = false;
         let uploadCancelled = false;
@@ -470,7 +475,6 @@
             loadConfig();
             setupUploadHandlers();
             loadViewPreferences();
-            loadExistingTempFiles();
             startTempFolderPolling();
         });
 
@@ -502,10 +506,8 @@
 
             // Click to open file dialog
             uploadArea.addEventListener('click', function(e) {
-                // Don't trigger if clicking on the button or its contents
-                if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
-                    return;
-                }
+                if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'LABEL') return;
                 fileInput.click();
             });
         }
@@ -584,12 +586,27 @@
                 if (successCount > 0) {
                     const successfulFiles = uploadQueue.filter(item => item.status === 'success' && item.responseData);
                     if (successfulFiles.length > 0) {
-                        const newFiles = successfulFiles.flatMap(item =>
+                        const allResponseFiles = successfulFiles.flatMap(item =>
                             item.responseData.files?.map(f => ({...f, selected: false, groupId: null})) || []
                         );
+
+                        // Polling may have added these files already without source_pdf.
+                        // Enrich any existing entries so auto-grouping can find them.
+                        allResponseFiles.forEach(f => {
+                            if (!f.source_pdf) return;
+                            const existing = uploadedImages.find(img => img.name === f.name);
+                            if (existing) existing.source_pdf = f.source_pdf;
+                        });
+
+                        // Add only files not already present
+                        const newFiles = allResponseFiles.filter(f => !uploadedImages.some(img => img.name === f.name));
                         uploadedImages = [...uploadedImages, ...newFiles];
+
+                        if (autoGroupPdf) {
+                            autoGroupPdfPages(allResponseFiles);
+                            displayGroups();
+                        }
                         displayImages();
-                        // Main content is always visible now
                     }
                 }
 
@@ -936,7 +953,8 @@
             .then(data => {
                 uploadedImages = [];
                 imageGroups = [];
-                // Main content stays visible - just clear the images
+                displayImages();
+                displayGroups();
                 showStatus('All images cleared', 'success');
             })
             .catch(error => {
@@ -959,9 +977,23 @@
             displayGroups();
         }
 
+        const MAX_IMAGES_PER_GROUP = 25;
+
         function processGroups() {
             if (imageGroups.length === 0) {
                 showModal('No Groups', 'Please create at least one group before processing', 'OK', false);
+                return;
+            }
+
+            const oversizedGroups = imageGroups.filter(g => g.images.length > MAX_IMAGES_PER_GROUP);
+            if (oversizedGroups.length > 0) {
+                const names = oversizedGroups.map(g => `"${g.name}" (${g.images.length} images)`).join(', ');
+                showModal(
+                    'Group Too Large',
+                    `The following groups exceed the ${MAX_IMAGES_PER_GROUP}-image limit and will likely fail: ${names}. Please split them into smaller groups before processing.`,
+                    'OK',
+                    false
+                );
                 return;
             }
 
@@ -1204,6 +1236,40 @@
             displayImages();
             displayGroups();
             showStatus(`Moved image to ${imageGroups[groupIndex].name}`, 'success');
+        }
+
+        function saveAutoGroupPreference() {
+            autoGroupPdf = document.getElementById('autoGroupPdf').checked;
+            localStorage.setItem('autoGroupPdf', autoGroupPdf);
+        }
+
+        function autoGroupPdfPages(newFiles) {
+            const pdfNames = [...new Set(
+                newFiles.filter(f => f.source_pdf).map(f => f.source_pdf)
+            )];
+            if (pdfNames.length === 0) return;
+
+            pdfNames.forEach(pdfName => {
+                const groupName = pdfName.replace(/\.pdf$/i, '');
+                const pages = uploadedImages.filter(img => img.source_pdf === pdfName && img.groupId === null);
+                if (pages.length === 0) return;
+
+                const newGroup = {
+                    id: imageGroups.length,
+                    name: groupName,
+                    images: pages.map(img => img.name)
+                };
+                pages.forEach(img => {
+                    const idx = uploadedImages.indexOf(img);
+                    uploadedImages[idx].groupId = newGroup.id;
+                    uploadedImages[idx].selected = false;
+                });
+                imageGroups.push(newGroup);
+                showStatus(
+                    `Auto-grouped ${pages.length} page${pages.length > 1 ? 's' : ''} from "${groupName}"`,
+                    'success'
+                );
+            });
         }
 
         // Single group creation function
@@ -1789,6 +1855,13 @@
             if (savedFilter !== null) {
                 hideGrouped = savedFilter === 'true';
                 document.getElementById('hideGroupedFilter').checked = hideGrouped;
+            }
+
+            // Load PDF auto-group preference
+            const savedAutoGroupPdf = localStorage.getItem('autoGroupPdf');
+            if (savedAutoGroupPdf !== null) {
+                autoGroupPdf = savedAutoGroupPdf === 'true';
+                document.getElementById('autoGroupPdf').checked = autoGroupPdf;
             }
         }
     </script>

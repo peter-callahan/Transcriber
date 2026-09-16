@@ -46,7 +46,7 @@ def get_file_order(folder_path):
     return sorted(image_files)
 
 
-def resize_image(image_path, max_size=(2048, 2048)):
+def resize_image(image_path, max_size=(2000, 2000)):
     try:
         # Log what we're attempting to process
         logger.info(f"Processing image: {image_path}")
@@ -78,7 +78,7 @@ def resize_image(image_path, max_size=(2048, 2048)):
                 logger.debug(f"Image already JPEG, saving in place")
 
             # Save the image (context manager is still open, but img.load() makes it safe)
-            img.save(output_path, "JPEG", quality=95)
+            img.save(output_path, "JPEG", quality=85)
             logger.debug(f"Saved to {output_path}")
 
         # Now that the context manager has closed, safe to remove original if needed
@@ -106,7 +106,7 @@ def resize_image(image_path, max_size=(2048, 2048)):
                     if img.size[0] > max_size[0] or img.size[1] > max_size[1]:
                         img.thumbnail(max_size, Image.Resampling.LANCZOS)
                     new_image_path = os.path.splitext(image_path)[0] + ".jpg"
-                    img.save(new_image_path, "JPEG", quality=95)
+                    img.save(new_image_path, "JPEG", quality=85)
                     os.remove(image_path)
                 logger.info(f"Successfully processed HEIC on retry: {image_path}")
             except Exception as e2:
