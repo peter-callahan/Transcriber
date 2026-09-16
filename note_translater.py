@@ -3,13 +3,22 @@ import re
 import json
 import base64
 import hashlib
+import time
 import unicodedata
 from datetime import datetime
 
 from obsidian_tags import load_saved_tags
 from pipeline_utils import (
-    ParseError, StructureError, IMAGE_EXTENSIONS, logger,
+    ParseError, StructureError, IMAGE_EXTENSIONS, INPUT_FOLDER, logger,
+    get_file_order, resolve_image_path, get_provider, get_model,
+    call_with_retry, CallMeta, PageResult, GroupResult, rollup_status,
+    append_metric, metric_row, atomic_write_json,
 )
+
+RESPONSES_FILE = os.getenv('RESPONSES_FILE', 'responses.json')
+CURRENT_RESPONSES_FILE = os.getenv('CURRENT_RESPONSES_FILE', 'responses_current.json')
+PAGE_MAX_TOKENS = 10000
+SUMMARY_MAX_TOKENS = 64000
 
 DATE_FORMAT = "%Y_%m_%d"
 DATE_FORMAT_DISPLAY = "YYYY_MM_DD"
@@ -377,3 +386,192 @@ def validate_group(folder_path, file_order, summary):
     for w in warnings:
         logger.warning(f"[VALIDATION] {w}")
     return warnings
+
+
+# ---- message building ----------------------------------------------------
+
+def _load_pairs(folder_path, file_order):
+    pairs = []
+    for image_file in file_order:
+        resolved = resolve_image_path(folder_path, image_file)
+        if resolved is None:
+            logger.warning(f"Skipping {image_file} — file not found and no .jpg equivalent exists")
+            continue
+        name, path = resolved
+        if not name.lower().endswith(IMAGE_EXTENSIONS):
+            continue
+        ocr_text = ""
+        text_path = create_text_path(path)
+        if os.path.exists(text_path):
+            with open(text_path, "r") as f:
+                ocr_text = f.read()
+        pairs.append({"filename": name, "path": path,
+                      "base64": encode_image(path), "ocr_text": ocr_text})
+    return pairs
+
+
+def build_page_messages(prompt, pair):
+    content = [{"type": "text", "text": prompt}]
+    if pair["ocr_text"]:                      # Anthropic rejects empty text blocks
+        content.append({"type": "text", "text": pair["ocr_text"]})
+    content.append({"type": "image", "base64": pair["base64"]})
+    return [{"role": "user", "content": content}]
+
+
+def build_summary_messages(prompt, pairs):
+    content = [{"type": "text", "text": prompt}]
+    for pair in pairs:
+        content.append({"type": "image", "base64": pair["base64"]})
+        if pair["ocr_text"]:
+            content.append({"type": "text", "text": f"\n\nOCR text:\n{pair['ocr_text']}\n"})
+    return [{"role": "user", "content": content}]
+
+
+# ---- group processing ----------------------------------------------------
+
+def _meta(run_id, group_name, filename, kind, phash, attempt, text, uncertain_count):
+    return CallMeta(
+        run_id=run_id, group_name=group_name, filename=filename, kind=kind,
+        provider=get_provider(), model=get_model(), prompt_hash=phash,
+        attempts=attempt.attempts, latency_ms=attempt.latency_ms,
+        input_tokens=attempt.usage.get("input_tokens", 0),
+        output_tokens=attempt.usage.get("output_tokens", 0),
+        word_count=len(text.split()), uncertain_count=uncertain_count,
+        timestamp=datetime.now().isoformat(timespec="seconds"),
+    )
+
+
+def process_group(group_name, on_update=None, input_dir=None, call_api_fn=None,
+                  run_id=None, sleep_fn=time.sleep):
+    on_update = on_update or (lambda name, **fields: None)
+    run_id = run_id or datetime.now().isoformat(timespec="seconds")
+    folder_path = os.path.join(input_dir or INPUT_FOLDER, group_name)
+    retry_kwargs = {"call_api_fn": call_api_fn, "sleep_fn": sleep_fn}
+
+    file_order = get_file_order(folder_path) if os.path.isdir(folder_path) else []
+    pairs = _load_pairs(folder_path, file_order) if file_order else []
+    logger.info(f"Transcribing group {group_name}: {[p['filename'] for p in pairs]}")
+
+    if not pairs:
+        result = GroupResult(group_name=group_name, status="failed", file_order=file_order,
+                             image_paths=[], pages=[], errors=["no images found in group"])
+        on_update(group_name, stage="complete", status="failed", error=result.errors[0])
+        return result
+
+    tags = load_obsidian_tags()
+    single_prompt = build_single_prompt(tags)
+    multi_prompt = build_multi_prompt(tags)
+    single_hash, multi_hash = prompt_hash(single_prompt), prompt_hash(multi_prompt)
+
+    pages, errors, total_attempts = [], [], 0
+    on_update(group_name, stage="transcribing", pages_total=len(pairs), pages_done=0, attempts=0)
+
+    for pair in pairs:
+        attempt = call_with_retry(build_page_messages(single_prompt, pair),
+                                  PAGE_MAX_TOKENS, parse_page, **retry_kwargs)
+        total_attempts += attempt.attempts
+        if attempt.ok:
+            data = attempt.parsed
+            warnings = page_warnings(data)
+            page = PageResult(
+                filename=pair["filename"], status="warning" if warnings else "done",
+                attempts=attempt.attempts, data=data, uncertain=data["uncertain"],
+                warnings=warnings, history=attempt.history,
+                meta=_meta(run_id, group_name, pair["filename"], "page", single_hash,
+                           attempt, data["transcription"], len(data["uncertain"])))
+        else:
+            error = f"{pair['filename']}: {attempt.error} after {attempt.attempts} attempts"
+            errors.append(f"page {error}")
+            page = PageResult(
+                filename=pair["filename"], status="failed", attempts=attempt.attempts,
+                error=attempt.error, history=attempt.history,
+                meta=_meta(run_id, group_name, pair["filename"], "page", single_hash,
+                           attempt, attempt.raw_text or "", 0))
+        append_metric(metric_row(page.meta, page.status, page.error))
+        pages.append(page)
+        on_update(group_name, pages_done=len(pages), attempts=total_attempts,
+                  warnings=[w for p in pages for w in p.warnings])
+
+    summary = summary_meta = summary_error = None
+    summary_attempts = 0
+    if len(pairs) > 1:
+        on_update(group_name, stage="summarising")
+        attempt = call_with_retry(build_summary_messages(multi_prompt, pairs),
+                                  SUMMARY_MAX_TOKENS, parse_summary, **retry_kwargs)
+        summary_attempts = attempt.attempts
+        total_attempts += attempt.attempts
+        if attempt.ok:
+            summary = attempt.parsed
+            text = summary["continuous_transcription"]
+        else:
+            summary_error = f"{attempt.error} after {attempt.attempts} attempts"
+            errors.append(f"summary: {summary_error}")
+            text = attempt.raw_text or ""
+        summary_meta = _meta(run_id, group_name, None, "summary", multi_hash, attempt, text, 0)
+        append_metric(metric_row(summary_meta, "failed" if summary_error else "done", summary_error))
+
+    group_warnings = validate_group(folder_path, file_order, summary)
+    status = rollup_status([p.status for p in pages], summary_error, group_warnings)
+    result = GroupResult(
+        group_name=group_name, status=status, file_order=file_order,
+        image_paths=[p["path"] for p in pairs], pages=pages,
+        summary=summary, summary_attempts=summary_attempts, summary_meta=summary_meta,
+        summary_error=summary_error, warnings=group_warnings, errors=errors,
+    )
+    save_group_result(result)
+    on_update(group_name, stage="complete", status=status, attempts=total_attempts,
+              warnings=group_warnings + [w for p in pages for w in p.warnings],
+              error="; ".join(errors) if errors else None)
+    logger.info(f"Group {group_name} finished with status {status}")
+    return result
+
+
+# ---- persistence ---------------------------------------------------------
+
+def _load_json(path):
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _unique_key(history, uuid):
+    if uuid not in history:
+        return uuid
+    n = 1
+    while f"{uuid}_{n}" in history:
+        n += 1
+    return f"{uuid}_{n}"
+
+
+def save_group_result(result, current_file=None, history_file=None):
+    """Write the group into the per-run file (bare uuid key) and append to history."""
+    current_file = current_file or CURRENT_RESPONSES_FILE
+    history_file = history_file or RESPONSES_FILE
+    uuid = generate_uuid([p.filename for p in result.pages] or result.file_order or [result.group_name],
+                         get_model())
+    payload = result.to_dict()
+
+    current = _load_json(current_file)
+    current[uuid] = payload
+    atomic_write_json(current_file, current)
+
+    history = _load_json(history_file)
+    history[_unique_key(history, uuid)] = payload
+    atomic_write_json(history_file, history)
+    return uuid
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1:
+        names = [sys.argv[1]]
+    else:
+        names = sorted(n for n in os.listdir(INPUT_FOLDER)
+                       if os.path.isdir(os.path.join(INPUT_FOLDER, n)))
+    exit_code = 0
+    for name in names:
+        if process_group(name).status == "failed":
+            exit_code = 1
+    sys.exit(exit_code)
