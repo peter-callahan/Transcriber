@@ -115,6 +115,27 @@ def test_progress_falls_back_to_run_status_file(client):
     assert client.get("/api/progress").get_json()["groups"][0]["status"] == "failed"
 
 
+def test_export_failure_is_caught_and_reported(client, monkeypatch):
+    """Fix: an exception during export/cleanup (e.g. an unwritable OUTPUT_FOLDER)
+    must not propagate out of the route as a bare 500 — it should be caught,
+    reflected in processing_progress, and the already-completed per-group
+    results must not be lost."""
+    def exploding_export(results, output_dir):
+        raise OSError("Read-only file system")
+    monkeypatch.setitem(app_module.PIPELINE, "resize", _ok_stage)
+    monkeypatch.setitem(app_module.PIPELINE, "ocr", _ok_stage)
+    monkeypatch.setitem(app_module.PIPELINE, "transcribe", _transcribe_factory())
+    monkeypatch.setitem(app_module.PIPELINE, "export", exploding_export)
+    resp = _post(client, [{"images": ["a.jpg"]}])
+    assert resp.status_code == 500
+    assert "Export/cleanup failed" in resp.get_json()["error"]
+    progress = client.get("/api/progress").get_json()
+    assert progress["status"] == "error"
+    assert "Error during export/cleanup" in progress["current_step"]
+    # the group that completed before the export step ran is still reflected
+    assert progress["groups"][0]["status"] == "done"
+
+
 def test_run_start_clears_previous_run_files(client, monkeypatch):
     with open(app_module.CURRENT_RESPONSES_FILE, "w") as f:
         f.write("{}")
