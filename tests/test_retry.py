@@ -100,3 +100,14 @@ def test_retry_with_feedback_seeds_conversation(scripted_api):
     sent = api.calls[0]
     assert sent[1]["content"][0]["text"] == "{prior"
     assert sent[2]["content"][0]["text"] == "second line is wrong"
+
+
+def test_raw_text_is_none_when_final_attempt_produces_no_output(scripted_api):
+    # Regression: stale raw_text must not leak across attempts when a parse
+    # failure is followed by a transport error with no output.
+    api = scripted_api(["{a", RateLimitError("429")])
+    a = call_with_retry(MESSAGES, 10, parse, max_calls=2, call_api_fn=api, sleep_fn=lambda s: None)
+    assert not a.ok and a.attempts == 2
+    assert a.history[0]["kind"] == "parse"
+    assert a.history[1]["kind"] == "transport"
+    assert a.raw_text is None  # Final attempt produced no output

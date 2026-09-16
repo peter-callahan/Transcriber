@@ -275,6 +275,7 @@ def call_with_retry(messages, max_tokens, parse, max_calls=3, call_api_fn=None, 
 
     while attempts < max_calls:
         attempts += 1
+        raw = None
         try:
             raw, call_usage = call_api_fn(conversation, max_tokens)
         except Exception as exc:
