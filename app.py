@@ -581,41 +581,48 @@ def process_images_route():
             })
             _persist_progress()
 
-    if completed:
-        processing_progress['current_step'] = 'Exporting results'
+    try:
+        if completed:
+            processing_progress['current_step'] = 'Exporting results'
+            _persist_progress()
+            exportable = [r for r in results if r['status'] in ('done', 'warning')]
+            for report in PIPELINE['export'](exportable, OUTPUT_FOLDER):
+                if not report['ok']:
+                    completed -= 1
+                    _fail_group(report['group_name'], f"export: {report['error']}", failed_groups)
+
+        processing_progress['current_step'] = 'Cleaning up temporary files'
+        for filename in os.listdir(TEMP_FOLDER):
+            file_path = os.path.join(TEMP_FOLDER, filename)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+
+        message = f'Processing completed: {completed}/{len(groups)} groups successful'
+        if failed_groups:
+            message += f', {len(failed_groups)} failed'
+        processing_progress.update({
+            'status': 'completed', 'current_step': 'Processing complete',
+            'percentage': 100, 'completed_groups': completed,
+        })
         _persist_progress()
-        exportable = [r for r in results if r['status'] in ('done', 'warning')]
-        for report in PIPELINE['export'](exportable, OUTPUT_FOLDER):
-            if not report['ok']:
-                completed -= 1
-                _fail_group(report['group_name'], f"export: {report['error']}", failed_groups)
 
-    processing_progress['current_step'] = 'Cleaning up temporary files'
-    for filename in os.listdir(TEMP_FOLDER):
-        file_path = os.path.join(TEMP_FOLDER, filename)
-        if os.path.isfile(file_path):
-            os.remove(file_path)
-
-    message = f'Processing completed: {completed}/{len(groups)} groups successful'
-    if failed_groups:
-        message += f', {len(failed_groups)} failed'
-    processing_progress.update({
-        'status': 'completed', 'current_step': 'Processing complete',
-        'percentage': 100, 'completed_groups': completed,
-    })
-    _persist_progress()
-
-    response_data = {
-        'message': message,
-        'groups_processed': completed,
-        'total_groups': len(groups),
-        'failed_groups': failed_groups,
-    }
-    if completed == 0:
-        return jsonify(response_data), 500
-    if failed_groups:
-        return jsonify(response_data), 207
-    return jsonify(response_data), 200
+        response_data = {
+            'message': message,
+            'groups_processed': completed,
+            'total_groups': len(groups),
+            'failed_groups': failed_groups,
+        }
+        if completed == 0:
+            return jsonify(response_data), 500
+        if failed_groups:
+            return jsonify(response_data), 207
+        return jsonify(response_data), 200
+    except Exception as e:
+        logger.exception('Error during export/cleanup')
+        processing_progress['status'] = 'error'
+        processing_progress['current_step'] = f'Error during export/cleanup: {e}'
+        _persist_progress()
+        return jsonify({'error': f'Export/cleanup failed: {e}'}), 500
 
 
 SENSITIVE_KEY_PATTERNS = ('_KEY', '_CREDENTIALS', '_SECRET', '_TOKEN', '_PASSWORD')
