@@ -1,192 +1,100 @@
 import os
-import shutil
-import json
-import logging
 import re
-from dotenv import load_dotenv
+import sys
+import json
+import shutil
 
-load_dotenv()
+from pipeline_utils import logger
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+OUTPUT_FOLDER = os.path.expanduser(os.getenv('OUTPUT_FOLDER', './markdown_output'))
+CURRENT_RESPONSES_FILE = os.getenv('CURRENT_RESPONSES_FILE', 'responses_current.json')
+EXPORTABLE = ("done", "warning")
 
 
 def sanitize_filename(filename):
-    """
-    Sanitize a string to be safe for use as a filename/folder name.
-    Removes or replaces characters that are invalid in file paths.
-    """
     if not filename:
         return 'Untitled'
-
-    # Replace problematic characters with underscores
-    # This includes: / \ : * ? " < > |
     sanitized = re.sub(r'[/\\:*?"<>|]', '_', filename)
-
-    # Replace multiple underscores with single underscore
-    sanitized = re.sub(r'_+', '_', sanitized)
-
-    # Remove leading/trailing underscores and spaces
-    sanitized = sanitized.strip('_ ')
-
-    # Ensure we have a valid filename
-    if not sanitized:
-        sanitized = 'Untitled'
-
-    return sanitized
+    sanitized = re.sub(r'_+', '_', sanitized).strip('_ ')
+    return sanitized or 'Untitled'
 
 
-output_dir = os.path.expanduser(os.getenv('OUTPUT_FOLDER', './markdown_output'))
-current_responses_file = os.getenv('CURRENT_RESPONSES_FILE', 'responses_current.json')
-
-# Create the output directory
-os.makedirs(output_dir, exist_ok=True)
-
-# Load current run responses (written by gpt4-note-translater.py for this run only)
-if not os.path.exists(current_responses_file):
-    logger.warning(f"No {current_responses_file} found — nothing to export.")
-    responses = {}
-else:
-    with open(current_responses_file, "r") as json_file:
-        responses = json.load(json_file)
-
-# Iterate through each response
-for uuid, response_data in responses.items():
-
-    title = ''
-    date = ''
-    summary = ''
-    tags = ''
-
-    individual_responses = response_data['individual_responses']
-
-    # Properly setting up title/date/metadata depending on nature of note upload
-    multi_note_upload = False
-
-    if response_data.get('summary', {}).get('is_valid_json'):
-        multi_note_upload = True
-        logger.info(f"Mutlipart note detected: {uuid}")
-
-        # Have a summary, add this to the top of the extraction
-        title = response_data['summary']['contents'].get('title', 'Untitled')
-        date = response_data['summary']['contents'].get('date', 'Unknown Date')
-        summary = response_data['summary']['contents'].get('summary', '')
-        tags = response_data['summary']['contents'].get('tags', [])
-
-        # Create safe folder name with proper null handling
-        safe_title = sanitize_filename(title) if title else 'Untitled'
-        safe_date = sanitize_filename(date) if date else 'Unknown_Date'
-        folder_name = f"{safe_date} - {safe_title}"
-
-    elif response_data.get('individual_responses') and response_data.get('individual_responses')[0]['is_valid_json']:
-        logger.info(f"Single note detected: {uuid}")
-        # Handle individual responses if present
-        single_note_object = response_data.get('individual_responses')[
-            0].get('transcription', '')
-
-        title = single_note_object.get('title', '')
-        date = single_note_object.get('date', '')
-        tags = single_note_object.get('tags', [])
-
-        # Create safe folder name with proper null handling
-        safe_title = sanitize_filename(title) if title else 'Untitled'
-        safe_date = sanitize_filename(date) if date else 'Unknown_Date'
-        folder_name = f"{safe_date} - {safe_title}"
-
+def build_markdown(group):
+    """(folder_name, markdown) for one exportable group dict."""
+    summary = group.get("summary")
+    pages = group.get("pages", [])
+    if summary:
+        title, date, tags = summary.get("title", ""), summary.get("date", ""), summary.get("tags", [])
+    elif pages and pages[0].get("data"):
+        data = pages[0]["data"]
+        title, date, tags = data.get("title", ""), data.get("date", ""), data.get("tags", [])
     else:
-        logger.warning(f"Unparsable note detected: {uuid}")
-        folder_name = os.path.splitext(os.path.basename(uuid))[
-            0]  # Use the UUID as fallback
-        # markdown_content = response_data["choices"][0]["message"]["content"]
-        # todo: may need to break out of here or return early
+        raise ValueError(f"group {group.get('group_name')} has no summary and no page data")
 
-    markdown_content = f"# {title}\n\n"
+    folder_name = f"{sanitize_filename(date) if date else 'Unknown_Date'} - {sanitize_filename(title)}"
 
-    if multi_note_upload:
-        markdown_content += f"## Summary\n\n{summary}\n\n"
-
-    # document date, different from individual response dates, which are listed below for multi-note uploads
-    markdown_content += f"**Date:** {date}\n\n"
-
+    md = f"# {title}\n\n"
+    if summary:
+        md += f"## Summary\n\n{summary.get('summary', '')}\n\n"
+    md += f"**Date:** {date}\n\n"
     if tags:
-        markdown_content += f"**Tags:** {' '.join([f'#{tag}' for tag in tags])}\n\n"
+        md += f"**Tags:** {' '.join(f'#{t}' for t in tags)}\n\n"
 
-    # Use continuous transcription from summary if available
-    summary_contents = response_data.get('summary', {}).get('contents', {})
-    if isinstance(summary_contents, dict) and summary_contents.get('continuous_transcription'):
-        markdown_content += f"{summary_contents['continuous_transcription']}\n\n"
-        logger.info(f"Using continuous transcription from summary for {uuid}")
+    if summary and summary.get("continuous_transcription"):
+        md += f"{summary['continuous_transcription']}\n\n"
     else:
-        # Fall back to individual page transcriptions
-        for individual_response in individual_responses:
-            # Use pre-normalized data (created by gpt4-note-translater.py)
-            # This is the single source of truth for parsing logic
-            normalized = individual_response.get('normalized', {})
+        for page in pages:
+            data = page.get("data") or {}
+            if summary and data.get("date"):
+                md += f"{data['date']}\n\n"
+            md += f"{data.get('transcription', '')}\n\n"
+    return folder_name, md
 
-            # Add date for multi-note uploads
-            if multi_note_upload:
-                date = normalized.get('date', '')
-                if date:
-                    markdown_content += f"{date}\n\n"
 
-            # Add transcription content
-            markdown_content += f"{normalized.get('transcription', '')}\n\n"
-        logger.info(f"Using individual page transcriptions for {uuid}")
-
-    # Ensure unique folder name
-    original_folder_name = folder_name
-    counter = 2
-    while os.path.exists(os.path.join(output_dir, folder_name)):
-        folder_name = f"{original_folder_name}_{counter}"
+def _export_group(group, output_dir):
+    folder_name, md = build_markdown(group)
+    candidate, counter = folder_name, 2
+    while os.path.exists(os.path.join(output_dir, candidate)):
+        candidate = f"{folder_name}_{counter}"
         counter += 1
+    folder_path = os.path.join(output_dir, candidate)
+    images_path = os.path.join(folder_path, "images")
+    os.makedirs(images_path, exist_ok=True)
 
-    folder_path = os.path.join(output_dir, folder_name)
-    os.makedirs(folder_path, exist_ok=True)
-
-    markdown_file_path = os.path.join(folder_path, f"{folder_name}.md")
-    with open(markdown_file_path, "w") as markdown_file:
-        markdown_file.write(markdown_content)
-
-    # Create an 'images' subfolder within the UUID folder
-    images_folder_path = os.path.join(folder_path, "images")
-    os.makedirs(images_folder_path, exist_ok=True)
-
-    # Get image paths from response data
-    image_paths = response_data.get("image_paths", [])
-
-    logger.debug(f"Found {len(image_paths)} image paths for {folder_name}")
-    logger.debug(f"Image paths: {image_paths}")
-
-    # Copy all relevant images to the 'images' subfolder
-    for image_path in image_paths:
-        logger.debug(f'Processing image path: {image_path}')
-
-        # Handle both absolute and relative paths
+    with open(os.path.join(folder_path, f"{candidate}.md"), "w") as f:
+        f.write(md)
+    for image_path in group.get("image_paths", []):
         if os.path.exists(image_path):
-            try:
-                shutil.copy2(image_path, images_folder_path)
-                logger.info(
-                    f'Successfully copied {os.path.basename(image_path)}')
-            except Exception as e:
-                logger.error(f'Failed to copy {image_path}: {e}')
+            shutil.copy2(image_path, images_path)
         else:
-            logger.warning(f'Image path does not exist: {image_path}')
-            # Try without the ./ prefix if it exists
-            clean_path = image_path.lstrip('./')
-            if os.path.exists(clean_path):
-                try:
-                    shutil.copy2(clean_path, images_folder_path)
-                    logger.info(
-                        f'Successfully copied {os.path.basename(clean_path)} (cleaned path)')
-                except Exception as e:
-                    logger.error(
-                        f'Failed to copy cleaned path {clean_path}: {e}')
-            else:
-                logger.error(
-                    f'Neither original nor cleaned path exists: {image_path} -> {clean_path}')
+            logger.warning(f"Image path does not exist: {image_path}")
+    return folder_path
 
-logger.info("Each JSON element has its own folder in markdown_output.")
+
+def export_run(results, output_dir):
+    """Export done/warning groups. Returns one status dict per attempted group."""
+    os.makedirs(output_dir, exist_ok=True)
+    report = []
+    for group in results:
+        name = group.get("group_name")
+        if group.get("status") not in EXPORTABLE:
+            logger.info(f"Skipping export for {name} (status {group.get('status')})")
+            continue
+        try:
+            path = _export_group(group, output_dir)
+            logger.info(f"Exported {name} to {path}")
+            report.append({"group_name": name, "ok": True, "path": path, "error": None})
+        except Exception as e:
+            logger.error(f"Export failed for {name}: {e}")
+            report.append({"group_name": name, "ok": False, "path": None, "error": str(e)})
+    return report
+
+
+if __name__ == "__main__":
+    if not os.path.exists(CURRENT_RESPONSES_FILE):
+        logger.warning(f"No {CURRENT_RESPONSES_FILE} found — nothing to export.")
+        sys.exit(0)
+    with open(CURRENT_RESPONSES_FILE) as f:
+        groups = list(json.load(f).values())
+    report = export_run(groups, OUTPUT_FOLDER)
+    sys.exit(0 if all(r["ok"] for r in report) else 1)
