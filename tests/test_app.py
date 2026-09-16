@@ -95,7 +95,9 @@ def test_stage_failure_marks_group_failed(client, monkeypatch):
 
 def test_unexpected_exception_is_isolated(client, monkeypatch):
     def explode(group_name, input_dir=None):
-        raise RuntimeError("kaboom")
+        if group_name == "n1":
+            raise RuntimeError("kaboom")
+        return StageResult(True)
     monkeypatch.setitem(app_module.PIPELINE, "resize", _ok_stage)
     monkeypatch.setitem(app_module.PIPELINE, "ocr", explode)
     monkeypatch.setitem(app_module.PIPELINE, "transcribe", _transcribe_factory())
