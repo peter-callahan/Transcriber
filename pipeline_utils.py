@@ -3,6 +3,7 @@ import os
 import json
 import logging
 import time
+import tempfile
 from dotenv import load_dotenv
 from dataclasses import dataclass, field, asdict
 from typing import Optional
@@ -17,6 +18,7 @@ logger = logging.getLogger("transcriber")
 
 IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.heic')
 INPUT_FOLDER = os.path.expanduser(os.getenv('INPUT_FOLDER', 'input_images'))
+METRICS_FILE = os.getenv('METRICS_FILE', 'metrics.jsonl')
 
 
 def get_file_order(folder_path):
@@ -323,3 +325,35 @@ def retry_with_feedback(messages, prior_output, feedback, max_tokens, parse, **k
         _text_message("user", feedback),
     ]
     return call_with_retry(seeded, max_tokens, parse, **kwargs)
+
+
+# --- Persistence -----------------------------------------------------------
+
+def atomic_write_json(path, data):
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
+def metric_row(meta, status, error):
+    row = asdict(meta)
+    row["status"] = status
+    row["error"] = error
+    return row
+
+
+def append_metric(row, path=None):
+    """Append one JSON line. This file is never truncated by the pipeline."""
+    path = path or METRICS_FILE
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(row) + "\n")

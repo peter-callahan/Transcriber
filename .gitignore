@@ -39,6 +39,9 @@ Thumbs.db
 # Responses cache
 responses.json
 responses.json.bak
+responses_current.json
+run_status.json
+metrics.jsonl
 
 # Obsidian tags
 obsidian_tags.json
