@@ -2,6 +2,8 @@ import os
 import json
 import logging
 from dotenv import load_dotenv
+from dataclasses import dataclass, field, asdict
+from typing import Optional
 
 load_dotenv()
 
@@ -40,3 +42,66 @@ def resolve_image_path(folder_path, image_file):
     if os.path.isfile(jpg_path):
         return jpg_name, jpg_path
     return None
+
+
+@dataclass
+class StageResult:
+    ok: bool
+    error: Optional[str] = None
+
+
+@dataclass
+class CallMeta:
+    run_id: str
+    group_name: str
+    filename: Optional[str]
+    kind: str                       # "page" | "summary"
+    provider: str
+    model: str
+    prompt_hash: str
+    attempts: int
+    latency_ms: int
+    input_tokens: int
+    output_tokens: int
+    word_count: int
+    uncertain_count: int
+    timestamp: str
+
+
+@dataclass
+class PageResult:
+    filename: str
+    status: str                     # "done" | "warning" | "failed"
+    attempts: int = 0
+    data: Optional[dict] = None
+    uncertain: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
+    error: Optional[str] = None
+    history: list = field(default_factory=list)
+    meta: Optional[CallMeta] = None
+
+
+@dataclass
+class GroupResult:
+    group_name: str
+    status: str                     # "done" | "warning" | "failed"
+    file_order: list
+    image_paths: list
+    pages: list                     # list[PageResult]
+    summary: Optional[dict] = None
+    summary_attempts: int = 0
+    summary_meta: Optional[CallMeta] = None
+    summary_error: Optional[str] = None
+    warnings: list = field(default_factory=list)
+    errors: list = field(default_factory=list)
+
+    def to_dict(self):
+        return asdict(self)
+
+
+def rollup_status(page_statuses, summary_error, group_warnings):
+    if not page_statuses or "failed" in page_statuses or summary_error:
+        return "failed"
+    if "warning" in page_statuses or group_warnings:
+        return "warning"
+    return "done"
