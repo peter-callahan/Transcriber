@@ -240,6 +240,18 @@
         .progress-step.active .progress-step-label { color: #007bff; font-weight: bold; }
         .progress-step.completed .progress-step-label { color: #28a745; }
 
+        .group-status-list { margin-top: 15px; display: flex; flex-direction: column; gap: 6px; }
+        .group-status-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 6px; background: #f7f7f7; font-size: 14px; transition: opacity 0.3s; }
+        .group-status-row .gs-name { font-weight: bold; min-width: 40px; }
+        .group-status-row .gs-label { color: #666; min-width: 70px; }
+        .group-status-row .gs-detail { flex: 1; color: #444; }
+        .group-status-row .gs-attempts { color: #888; font-size: 12px; }
+        .group-status-row.pending { color: #999; }
+        .group-status-row.running { background: #e8f1ff; color: #0b5ed7; }
+        .group-status-row.done { opacity: 0.5; }
+        .group-status-row.warning { background: #fff4e0; color: #8a5a00; }
+        .group-status-row.failed { background: #fde8e8; color: #a11a1a; }
+
         /* Inline editing styles */
         .group-name-editable { cursor: pointer; padding: 2px 4px; border-radius: 4px; }
         .group-name-editable:hover { background: #f0f0f0; }
@@ -412,6 +424,7 @@
                     <div class="progress-step-label">Complete</div>
                 </div>
             </div>
+            <div class="group-status-list" id="groupStatusList"></div>
         </div>
 
         <!-- Status Section -->
@@ -476,6 +489,18 @@
             setupUploadHandlers();
             loadViewPreferences();
             startTempFolderPolling();
+
+            fetch('/api/progress')
+                .then(r => r.json())
+                .then(progress => {
+                    if (progress.status === 'completed' && progress.groups && progress.groups.length) {
+                        lastProgress = progress;
+                        showProgressBar();
+                        updateProgressFromServer(progress);
+                        document.getElementById('progressHeader').textContent = `Last run (${progress.run_id})`;
+                    }
+                })
+                .catch(e => console.error('Failed to load last run:', e));
         });
 
         function setupUploadHandlers() {
@@ -995,6 +1020,12 @@
                     false
                 );
                 return;
+            }
+
+            const failedLast = (lastProgress && lastProgress.groups || []).filter(g => g.status === 'failed').length;
+            if (failedLast > 0) {
+                const ok = confirm(`Last run has ${failedLast} failed group${failedLast === 1 ? '' : 's'}. Running again discards the chance to retry. Continue?`);
+                if (!ok) return;
             }
 
             processWithProgress();
@@ -1599,7 +1630,44 @@
             }
         }
 
+        let lastProgress = null;
+
+        function renderGroupStatus(groups) {
+            const list = document.getElementById('groupStatusList');
+            if (!groups || groups.length === 0) { list.innerHTML = ''; return; }
+            list.innerHTML = groups.map(g => {
+                let detail = '';
+                if (g.status === 'running') {
+                    detail = `${g.stage || 'starting'} — ${g.pages_done}/${g.pages_total} pages`;
+                } else if (g.status === 'failed') {
+                    detail = g.error || 'failed';
+                } else if (g.status === 'warning') {
+                    detail = `${g.warnings.length} warning${g.warnings.length === 1 ? '' : 's'}: ${g.warnings[0] || ''}`;
+                } else if (g.status === 'done') {
+                    detail = 'done';
+                } else {
+                    detail = 'waiting';
+                }
+                const attempts = g.attempts ? `${g.attempts} call${g.attempts === 1 ? '' : 's'}` : '';
+                return `<div class="group-status-row ${g.status}">
+                    <span class="gs-name">${g.name}</span>
+                    <span class="gs-label">${g.label || ''}</span>
+                    <span class="gs-detail">${escapeHtml(detail)}</span>
+                    <span class="gs-attempts">${attempts}</span>
+                </div>`;
+            }).join('');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text == null ? '' : String(text);
+            return div.innerHTML;
+        }
+
         function updateProgressFromServer(progress) {
+            lastProgress = progress;
+            renderGroupStatus(progress.groups);
+
             // Update progress bar with server data
             document.getElementById('progressBarFill').style.width = progress.percentage + '%';
 
@@ -1666,29 +1734,35 @@
                 // Stop polling when request completes
                 clearInterval(progressPolling);
 
-                if (!response.ok) {
+                if (!response.ok && response.status !== 207 && response.status !== 500) {
                     throw new Error('Network response was not ok');
                 }
 
                 // Get the final result
                 const data = await response.json();
 
-                // Final update
-                updateProgress(5, 100, 'Processing complete!');
-                await new Promise(resolve => setTimeout(resolve, 500));
+                // Final update from the server so the list shows the last state
+                try {
+                    const finalProgress = await (await fetch('/api/progress')).json();
+                    updateProgressFromServer(finalProgress);
+                } catch (e) {
+                    console.error('Failed to fetch final progress:', e);
+                }
+                updateProgress(5, 100, data.message || 'Processing complete!');
 
                 if (data.message) {
-                    showStatus(data.message, 'success', true); // persist = true
-                    // Clear everything after successful processing
+                    const level = (data.failed_groups && data.failed_groups.length) ? 'error' : 'success';
+                    showStatus(data.message, level, true);
                     uploadedImages = [];
                     imageGroups = [];
                     displayImages();
                     displayGroups();
 
-                    // Hide progress bar after a delay
-                    setTimeout(() => {
-                        hideProgressBar();
-                    }, 2000);
+                    const problems = (lastProgress && lastProgress.groups || [])
+                        .some(g => g.status === 'failed' || g.status === 'warning');
+                    if (!problems) {
+                        setTimeout(() => { hideProgressBar(); }, 2000);
+                    }
                 } else if (data.error) {
                     throw new Error(data.error);
                 }
