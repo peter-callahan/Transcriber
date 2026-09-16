@@ -2,7 +2,7 @@
 
 ## P1 — High Priority
 
-### [TODO-1] Add retry with exponential backoff to call_api()
+### DONE - [TODO-1] Add retry with exponential backoff to call_api()
 **What:** Wrap call_api() in gpt4-note-translater.py with retry logic using tenacity.
 **Why:** A single rate-limit or timeout silently fails an entire page or crashes a multi-page group. One transient API error = lost transcription work.
 **Context:** call_api() at line 290 has no error handling. The TODO comment at line 595 also notes invalid JSON should be retried. Use `pip install tenacity` and a `@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))` decorator.
@@ -10,7 +10,7 @@
 
 ---
 
-### [TODO-3] Refactor subprocess orchestration to in-process function calls
+### DONE - [TODO-3] Refactor subprocess orchestration to in-process function calls
 **What:** Each pipeline script (process_images.py, googlevision-translater.py, gpt4-note-translater.py) exposes a `process_group(group_name)` function. app.py calls them directly instead of via subprocess.run().
 **Why:** subprocess.run() means no shared logging, errors are strings not exceptions, 'python' binary is hardcoded (breaks in venvs), and the pipeline can't be tested.
 **Context:** Keep `__main__` blocks for CLI use. This is the prerequisite for integration tests (TODO-5). The in-process functions should return a result object, not just log.
@@ -26,18 +26,19 @@
 
 ---
 
-### [TODO-5] Add a basic test suite with pytest
+### DONE - [TODO-5] Add a basic test suite with pytest
 **What:** Unit tests for pure functions: get_file_order, clean_json_text, parse_date_string, sanitize_filename, validate_group_output. Integration tests after TODO-3.
 **Why:** Zero tests exist. Three bugs that a test would have caught have already been fixed (PNG→JPG remapping, empty individual_responses crash, empty OCR text block).
 **Context:** Start with `pytest` + `pytest-mock`. No mocking needed for unit tests. Add `tests/` directory with `test_pipeline.py` and `test_export.py`.
 **Effort:** M
 **Depends on:** TODO-3 for integration tests (unit tests can be done independently)
+**Status:** pytest suite in tests/ — run with the media_handler interpreter: `~/.pyenv/versions/3.11.8/envs/media_handler/bin/python -m pytest`.
 
 ---
 
 ## P2 — Medium Priority
 
-### [TODO-2] Consolidate get_file_order() into a shared pipeline_utils.py
+### DONE - [TODO-2] Consolidate get_file_order() into a shared pipeline_utils.py
 **What:** The function is copy-pasted identically in gpt4-note-translater.py:32, googlevision-translater.py:19, and process_images.py:22.
 **Why:** A bug fix requires updating 3 files. This already caused a divergence — the PNG→JPG remapping fix was applied in 2 of 3 files at different times.
 **Context:** Create `pipeline_utils.py` with `get_file_order()` and shared logging setup. All 3 scripts import from it.

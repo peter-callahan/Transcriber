@@ -10,6 +10,18 @@ Expecting traffic on 5001.
 flask run --host=0.0.0.0 --port=5001
 ```
 
+### Tests
+
+```bash
+~/.pyenv/versions/3.11.8/envs/media_handler/bin/python -m pytest
+```
+
+### Files written by a run
+
+- `responses_current.json`, `run_status.json` — last run only; overwritten at the start of the next run. A failed group's results stay here so it can be retried.
+- `metrics.jsonl` — one line per API call (model, prompt hash, attempts, tokens, latency). Never truncated.
+- `responses.json` — append-only history of every group result.
+
 ## Todo
 
 1. update naming to <DATE> - Title

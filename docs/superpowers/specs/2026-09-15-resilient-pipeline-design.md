@@ -47,7 +47,7 @@ Goal: transient failures are retried within a cost cap, a failed group never sto
 | `googlevision-translater.py` | `googlevision_translater.py` | `process_group(group_name) -> StageResult` |
 | `gpt4-note-translater.py` | `note_translater.py` | `process_group(group_name, on_update) -> GroupResult` |
 | (copy-pasted ×3) | `pipeline_utils.py` | `get_file_order()`, logging setup, provider client, `call_api()`, `call_with_retry()` |
-| `export_responses.py` | `export_responses.py` | `export_run(results) -> list[Path]` |
+| `export_responses.py` | `export_responses.py` | `export_run(results, output_dir) -> list[dict]` |
 
 Hyphenated filenames are renamed because they cannot be imported. Each module keeps an `if __name__ == "__main__":` block that parses argv and calls its `process_group`, so `transpose_notes.sh` and manual CLI use keep working.
 
@@ -71,7 +71,7 @@ class PageResult:
     warnings: list[str]
     error: str | None                   # last error when status == "failed"
     history: list[dict]                 # per-attempt {"kind","error"} for the repair trail
-    meta: CallMeta | None               # None when status == "failed" before any response
+    meta: CallMeta | None               # always present; a failed call records the usage it consumed
 
 @dataclass
 class CallMeta:

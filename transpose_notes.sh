@@ -10,8 +10,8 @@ echo "Using service account authentication from .env file..."
 
 python3 process_images.py
 
-python3 googlevision-translater.py
+python3 googlevision_translater.py
 
-python3 gpt4-note-translater.py
+python3 note_translater.py
 
 python3 export_responses.py
