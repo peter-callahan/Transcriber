@@ -47,7 +47,8 @@ def empty_subfolders(root_folder):
             dir_path = os.path.join(root, dir_name)
             try:
                 shutil.rmtree(dir_path)
-                logger.info(f"Deleted subfolder: {dir_name} from {subfolder_name}/")
+                logger.info(
+                    f"Deleted subfolder: {dir_name} from {subfolder_name}/")
             except Exception as e:
                 logger.error(f"Error deleting directory {dir_path}: {e}")
 

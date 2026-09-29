@@ -22,6 +22,7 @@ venv/
 env/
 ENV/
 .env
+.flaskenv
 
 # IDE files
 .vscode/
@@ -49,3 +50,4 @@ obsidian_hashtags.txt
 
 # Local worktrees
 .worktrees/
+.gstack/

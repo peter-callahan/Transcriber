@@ -2,6 +2,7 @@ import os
 import json
 import shutil
 import logging
+import threading
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.utils import secure_filename
@@ -15,6 +16,7 @@ import process_images
 import googlevision_translater
 import note_translater
 import export_responses
+import obsidian_tags
 from pipeline_utils import atomic_write_json, INPUT_FOLDER
 
 # Register HEIF/HEIC format support
@@ -23,6 +25,11 @@ register_heif_opener()
 # Load environment variables for Flask app
 load_dotenv()
 
+# `flask run` picks up FLASK_DEBUG from .flaskenv (gitignored, local dev only — see
+# that file). It enables Werkzeug's auto-reloader, so code edits take effect on the
+# next request instead of requiring a manual restart, plus an in-browser debugger.
+# NEVER let FLASK_DEBUG be set anywhere this server is reachable off localhost — the
+# debugger allows arbitrary code execution from any page that hits an unhandled error.
 app = Flask(__name__)
 
 # Configure logging for the Flask app
@@ -69,6 +76,54 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 if os.path.exists(TEMP_FOLDER):
     shutil.rmtree(TEMP_FOLDER)
 os.makedirs(TEMP_FOLDER)
+
+# Optional, opt-in refresh of the Obsidian tag vocabulary from the vault. Gated
+# behind UPDATE_TAGS (not every startup): the vault can be on iCloud/Dropbox with
+# "optimize storage" placeholder files, so a full scan can take minutes waiting on
+# on-demand downloads rather than running instantly. Runs in a background thread so
+# it never blocks Flask startup (or the --debug reloader's restart-on-save) either
+# way. GET /api/tag_scan_status reports progress for the UI banner.
+OBSIDIAN_VAULT_PATH = os.getenv('OBSIDIAN_VAULT_PATH', '')
+OBSIDIAN_TAGS_FILE = os.getenv('OBSIDIAN_TAGS_FILE', 'obsidian_tags.json')
+
+tag_scan_status = {'status': 'idle', 'tag_count': None, 'error': None}
+
+
+def _refresh_obsidian_tags():
+    global tag_scan_status
+    tag_scan_status = {'status': 'scanning', 'tag_count': None, 'error': None}
+    logger.info(f"Tag scan started: {OBSIDIAN_VAULT_PATH}")
+    try:
+        tag_counts = obsidian_tags.get_obsidian_tags(OBSIDIAN_VAULT_PATH)
+        if tag_counts:
+            obsidian_tags.save_tags(tag_counts, OBSIDIAN_TAGS_FILE)
+            logger.info(f"Tag scan complete: {len(tag_counts)} tags from {OBSIDIAN_VAULT_PATH}")
+            tag_scan_status = {'status': 'complete', 'tag_count': len(tag_counts), 'error': None}
+        else:
+            msg = f"No tags found scanning {OBSIDIAN_VAULT_PATH} — keeping existing {OBSIDIAN_TAGS_FILE} as-is"
+            logger.warning(msg)
+            tag_scan_status = {'status': 'error', 'tag_count': None, 'error': msg}
+    except Exception as e:
+        logger.warning(f"Tag scan failed for {OBSIDIAN_VAULT_PATH}: {e}")
+        tag_scan_status = {'status': 'error', 'tag_count': None, 'error': str(e)}
+
+
+# Under `flask run` with the debug reloader on, Werkzeug imports this module twice:
+# once in a throwaway stub process (to build its file-watch list), then again in the
+# real worker it re-execs with WERKZEUG_RUN_MAIN=true. Without this guard the vault
+# scan would kick off twice — doubling the wait — every single startup.
+_debug_reloader_on = os.getenv('FLASK_DEBUG', '').lower() in ('1', 'true', 'yes', 'on')
+_is_reloader_stub = _debug_reloader_on and os.environ.get('WERKZEUG_RUN_MAIN') != 'true'
+
+if _is_reloader_stub:
+    pass  # this process never serves requests — the real worker runs the block below
+elif OBSIDIAN_VAULT_PATH and os.getenv('UPDATE_TAGS', '').lower() in ('1', 'true', 'yes'):
+    threading.Thread(target=_refresh_obsidian_tags, daemon=True).start()
+elif OBSIDIAN_VAULT_PATH:
+    logger.info("UPDATE_TAGS not set — skipping vault scan, using cached obsidian_tags.json as-is "
+                "(set UPDATE_TAGS=1 to refresh tags on the next startup)")
+else:
+    logger.info("OBSIDIAN_VAULT_PATH not set — using cached obsidian_tags.json as-is")
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'heic', 'pdf'}
 PDF_DPI = 150
@@ -662,6 +717,12 @@ def get_progress():
         except (OSError, json.JSONDecodeError):
             pass
     return jsonify(processing_progress)
+
+
+@app.route('/api/tag_scan_status')
+def get_tag_scan_status():
+    """Obsidian vault tag-scan progress, for the UI banner."""
+    return jsonify(tag_scan_status)
 
 
 if __name__ == '__main__':

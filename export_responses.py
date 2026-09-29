@@ -3,12 +3,16 @@ import re
 import sys
 import json
 import shutil
+import yaml
+from datetime import datetime
 
-from pipeline_utils import logger
+from pipeline_utils import logger, parse_date_string
 
 OUTPUT_FOLDER = os.path.expanduser(os.getenv('OUTPUT_FOLDER', './markdown_output'))
 CURRENT_RESPONSES_FILE = os.getenv('CURRENT_RESPONSES_FILE', 'responses_current.json')
 EXPORTABLE = ("done", "warning")
+DOCUMENT_TYPE = "journal entry"
+SOURCE = "digital-conversion"
 
 
 def sanitize_filename(filename):
@@ -19,8 +23,35 @@ def sanitize_filename(filename):
     return sanitized or 'Untitled'
 
 
-def build_markdown(group):
+def _format_timestamp(dt):
+    """YYYY_MM_DD HH:MM:SS +HH:MM (colon inserted into the UTC offset)."""
+    s = dt.strftime('%Y_%m_%d %H:%M:%S %z')
+    if len(s) >= 5 and s[-5] in '+-':
+        s = f"{s[:-2]}:{s[-2:]}"
+    return s
+
+
+def _build_frontmatter(title, date_created, date_modified, tags):
+    """YAML frontmatter block. Uses yaml.safe_dump throughout so a title or tag
+    containing a colon/quote can never corrupt the block's structure."""
+    scalars = {
+        "title": title,
+        "date created": date_created,
+        "date modified": date_modified,
+    }
+    head = yaml.safe_dump(scalars, sort_keys=False, allow_unicode=True).rstrip("\n")
+    tags_line = "tags: " + yaml.safe_dump(
+        tags, default_flow_style=True, allow_unicode=True, default_style="'"
+    ).rstrip("\n")
+    tail = yaml.safe_dump(
+        {"document_type": DOCUMENT_TYPE, "source": SOURCE}, sort_keys=False, allow_unicode=True
+    ).rstrip("\n")
+    return f"---\n{head}\n{tags_line}\n{tail}\n---\n\n"
+
+
+def build_markdown(group, exported_at=None):
     """(folder_name, markdown) for one exportable group dict."""
+    exported_at = exported_at or datetime.now().astimezone()
     summary = group.get("summary")
     pages = group.get("pages", [])
     if summary:
@@ -31,14 +62,16 @@ def build_markdown(group):
     else:
         raise ValueError(f"group {group.get('group_name')} has no summary and no page data")
 
+    # Mechanical (non-LLM) date normalization: coerces a partial date like "August 2020"
+    # to 2020_08_01; leaves a full date untouched; falls back to the raw string if it
+    # matches no known pattern at all, rather than discarding it.
+    date = parse_date_string(date) or date
+
     folder_name = f"{sanitize_filename(date) if date else 'Unknown_Date'} - {sanitize_filename(title)}"
 
-    md = f"# {title}\n\n"
+    md = _build_frontmatter(title, date, _format_timestamp(exported_at), tags)
     if summary:
         md += f"## Summary\n\n{summary.get('summary', '')}\n\n"
-    md += f"**Date:** {date}\n\n"
-    if tags:
-        md += f"**Tags:** {' '.join(f'#{t}' for t in tags)}\n\n"
 
     if summary and summary.get("continuous_transcription"):
         md += f"{summary['continuous_transcription']}\n\n"

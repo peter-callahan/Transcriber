@@ -20,67 +20,14 @@ CURRENT_RESPONSES_FILE = os.getenv('CURRENT_RESPONSES_FILE', 'responses_current.
 PAGE_MAX_TOKENS = 10000
 SUMMARY_MAX_TOKENS = 64000
 
-DATE_FORMAT = "%Y_%m_%d"
 DATE_FORMAT_DISPLAY = "YYYY_MM_DD"
 MIN_TRANSCRIPTION_LENGTH = 20
 INLINE_MARKER_RE = re.compile(r"\[\?[^\]]*\]")
 
 
 # ---- verbatim from gpt4-note-translater.py -------------------------------
-# parse_date_string, generate_uuid, create_text_path, clean_json_text, encode_image
-# (paste here, unchanged)
-
-def parse_date_string(date_str):
-    """Try multiple formats and coerce to configured DATE_FORMAT (YYYY_MM_DD).
-
-    Handles full dates and partial dates (month/year only).
-    Partial dates are coerced to the first day of the month (YYYY_MM_01).
-    """
-    # Full date formats (with day)
-    full_date_formats = [
-        "%Y_%m_%d",      # 2025_08_01 (our target format)
-        "%Y-%m-%d",      # 2025-08-01
-        "%d-%b-%Y",      # 1-Aug-2025
-        "%d/%m/%Y",      # 01/08/2025
-        "%m/%d/%Y",      # 08/01/2025
-        "%d %b %Y",      # 1 Aug 2025
-        "%b %d, %Y",     # Aug 1, 2025
-        "%Y.%m.%d",      # 2025.08.01
-        "%d.%m.%Y",      # 01.08.2025
-    ]
-
-    # Partial date formats (month/year only - will default to day 1)
-    partial_date_formats = [
-        "%b %Y",         # Aug 2025
-        "%B %Y",         # August 2025
-        "%b-%Y",         # Aug-2025
-        "%B-%Y",         # August-2025
-        "%m/%Y",         # 08/2025
-        "%m-%Y",         # 08-2025
-        "%Y-%m",         # 2025-08
-        "%Y/%m",         # 2025/08
-    ]
-
-    # Try full date formats first
-    for fmt in full_date_formats:
-        try:
-            dt = datetime.strptime(date_str.strip(), fmt)
-            return dt.strftime(DATE_FORMAT)
-        except Exception:
-            continue
-
-    # Try partial date formats (month/year only)
-    for fmt in partial_date_formats:
-        try:
-            dt = datetime.strptime(date_str.strip(), fmt)
-            # Force day to 01 for partial dates
-            dt = dt.replace(day=1)
-            return dt.strftime(DATE_FORMAT)
-        except Exception:
-            continue
-
-    return None  # Could not parse
-
+# generate_uuid, create_text_path, clean_json_text, encode_image
+# (parse_date_string moved to pipeline_utils.py — shared with export_responses.py)
 
 def generate_uuid(filenames, model):
     if not filenames:

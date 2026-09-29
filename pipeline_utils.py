@@ -4,21 +4,26 @@ import json
 import logging
 import time
 import tempfile
+from datetime import datetime
 from dotenv import load_dotenv
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
 load_dotenv()
 
+LOG_FILE = os.getenv('LOG_FILE', 'transcriber.log')
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(), logging.FileHandler(LOG_FILE)]
 )
 logger = logging.getLogger("transcriber")
 
 IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.heic')
 INPUT_FOLDER = os.path.expanduser(os.getenv('INPUT_FOLDER', 'input_images'))
 METRICS_FILE = os.getenv('METRICS_FILE', 'metrics.jsonl')
+DATE_FORMAT = "%Y_%m_%d"
 
 
 def get_file_order(folder_path):
@@ -45,6 +50,55 @@ def resolve_image_path(folder_path, image_file):
     jpg_path = os.path.join(folder_path, jpg_name)
     if os.path.isfile(jpg_path):
         return jpg_name, jpg_path
+    return None
+
+
+def parse_date_string(date_str):
+    """Try multiple formats and coerce to DATE_FORMAT (YYYY_MM_DD). No LLM call.
+
+    Handles full dates and partial dates (month/year only).
+    Partial dates are coerced to the first day of the month (YYYY_MM_01).
+    Returns None if date_str matches nothing.
+    """
+    full_date_formats = [
+        "%Y_%m_%d",      # 2025_08_01 (our target format)
+        "%Y-%m-%d",      # 2025-08-01
+        "%d-%b-%Y",      # 1-Aug-2025
+        "%d/%m/%Y",      # 01/08/2025
+        "%m/%d/%Y",      # 08/01/2025
+        "%d %b %Y",      # 1 Aug 2025
+        "%b %d, %Y",     # Aug 1, 2025
+        "%Y.%m.%d",      # 2025.08.01
+        "%d.%m.%Y",      # 01.08.2025
+    ]
+    partial_date_formats = [
+        "%b %Y",         # Aug 2025
+        "%B %Y",         # August 2025
+        "%b-%Y",         # Aug-2025
+        "%B-%Y",         # August-2025
+        "%m/%Y",         # 08/2025
+        "%m-%Y",         # 08-2025
+        "%m_%Y",         # 08_2025
+        "%Y-%m",         # 2025-08
+        "%Y/%m",         # 2025/08
+        "%Y_%m",         # 2025_08 — the model's own YYYY_MM_DD convention, truncated
+    ]
+
+    for fmt in full_date_formats:
+        try:
+            dt = datetime.strptime(date_str.strip(), fmt)
+            return dt.strftime(DATE_FORMAT)
+        except Exception:
+            continue
+
+    for fmt in partial_date_formats:
+        try:
+            dt = datetime.strptime(date_str.strip(), fmt)
+            dt = dt.replace(day=1)
+            return dt.strftime(DATE_FORMAT)
+        except Exception:
+            continue
+
     return None
 
 

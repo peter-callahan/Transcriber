@@ -7,13 +7,23 @@ This is a script that uses genAI to turn screenshots of handwritten notes into t
 Expecting traffic on 5001.
 
 ```bash
-flask run --host=0.0.0.0 --port=5001
+source ~/.pyenv/versions/3.11.8/envs/media_handler/bin/activate && flask run --host=0.0.0.0 --port=5001
 ```
 
 ### Tests
 
 ```bash
 ~/.pyenv/versions/3.11.8/envs/media_handler/bin/python -m pytest
+```
+
+### Authing for Google OCR
+```
+gcloud auth application-default login
+```
+
+### Updating Obsidian Tags to be Used in Document Tagging
+```
+UPDATE_TAGS=1 flask run --host=0.0.0.0 --port=5001
 ```
 
 ### Files written by a run

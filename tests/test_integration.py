@@ -45,7 +45,8 @@ def test_real_process_group_output_exports_cleanly(group_folder, tmp_path):
     md_path = expected_folder / "2025_08_01 - Two page note.md"
     assert md_path.exists()
     content = md_path.read_text()
-    assert "# Two page note" in content
+    assert content.startswith("---\ntitle: Two page note\n")
+    assert "date created: '2025_08_01'" in content
     assert SUMMARY_OK["continuous_transcription"] in content
 
     images_dir = expected_folder / "images"

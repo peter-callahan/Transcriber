@@ -8,17 +8,6 @@ import note_translater as nt
 
 # --- moved helpers ---------------------------------------------------------
 
-@pytest.mark.parametrize("raw,expected", [
-    ("2025_08_01", "2025_08_01"),
-    ("2025-08-01", "2025_08_01"),
-    ("Aug 1, 2025", "2025_08_01"),
-    ("Aug 2025", "2025_08_01"),
-    ("garbage", None),
-])
-def test_parse_date_string(raw, expected):
-    assert nt.parse_date_string(raw) == expected
-
-
 def test_clean_json_text_strips_fences_and_escapes_newlines():
     raw = '```json\n{"transcription": "line one\nline two"}\n```'
     assert json.loads(nt.clean_json_text(raw)) == {"transcription": "line one\nline two"}

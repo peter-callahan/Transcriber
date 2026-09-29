@@ -17,6 +17,7 @@ os.environ.update({
     "METRICS_FILE": str(SANDBOX / "metrics.jsonl"),
     "RUN_STATUS_FILE": str(SANDBOX / "run_status.json"),
     "OBSIDIAN_TAGS_FILE": str(SANDBOX / "obsidian_tags.json"),
+    "LOG_FILE": str(SANDBOX / "transcriber.log"),
     "AI_PROVIDER": "openai",
     "OPENAI_MODEL": "test-model",
     "GOOGLE_APPLICATION_CREDENTIALS": "",

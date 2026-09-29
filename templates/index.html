@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Photo Organizer & OCR</title>
+    <title>Transcriber</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #f5f5f5; }
@@ -268,6 +268,8 @@
             <p>Upload photos, group them visually, then process with OCR and AI transcription</p>
         </div>
 
+        <div id="tagScanBanner" style="display: none;"></div>
+
         <!-- Upload Section -->
         <div class="upload-area" id="uploadArea">
             <div>
@@ -489,6 +491,7 @@
             setupUploadHandlers();
             loadViewPreferences();
             startTempFolderPolling();
+            pollTagScanStatus();
 
             fetch('/api/progress')
                 .then(r => r.json())
@@ -1119,6 +1122,40 @@
 
         function hideSection(sectionId) {
             document.getElementById(sectionId).style.display = 'none';
+        }
+
+        function renderTagScanBanner(status) {
+            const banner = document.getElementById('tagScanBanner');
+            if (status.status === 'scanning') {
+                banner.style.display = 'block';
+                banner.innerHTML = '<div class="processing-status">'
+                    + '🔄 Scanning Obsidian vault for tags — this can take a few minutes on a '
+                    + 'synced vault. Wait for "scan complete" before processing new images.</div>';
+            } else if (status.status === 'complete') {
+                banner.style.display = 'block';
+                banner.innerHTML = `<div class="processing-status success">`
+                    + `✅ Tag scan complete — ${status.tag_count} tags loaded.</div>`;
+                setTimeout(() => { banner.style.display = 'none'; banner.innerHTML = ''; }, 8000);
+            } else if (status.status === 'error') {
+                banner.style.display = 'block';
+                banner.innerHTML = `<div class="processing-status error">`
+                    + `⚠️ Tag scan failed: ${escapeHtml(status.error || 'unknown error')}</div>`;
+            } else {
+                banner.style.display = 'none';
+                banner.innerHTML = '';
+            }
+        }
+
+        function pollTagScanStatus() {
+            fetch('/api/tag_scan_status')
+                .then(r => r.json())
+                .then(status => {
+                    renderTagScanBanner(status);
+                    if (status.status === 'scanning') {
+                        setTimeout(pollTagScanStatus, 3000);
+                    }
+                })
+                .catch(e => console.error('Failed to fetch tag scan status:', e));
         }
 
         function showStatus(message, type = 'info', persist = false) {
